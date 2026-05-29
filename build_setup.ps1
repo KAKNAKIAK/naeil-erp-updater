@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "v1.1.5"
+$Version = "v1.1.6"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $ReleaseDir = Join-Path $ReleaseRoot "NaeilERPUpdater"

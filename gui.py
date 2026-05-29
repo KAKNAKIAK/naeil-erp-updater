@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.5"
+APP_VERSION = "v1.1.6"
 UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
 
 def get_app_dir():
@@ -141,6 +141,7 @@ class RpaGuiApp:
         self.rpa_thread = None
         self.is_running = False
         self.is_paused = False
+        self.is_user_stopped = False
         self.driver = None
         self.console_redirector = None
         
@@ -654,6 +655,7 @@ class RpaGuiApp:
             
         self.is_running = True
         self.is_paused = False
+        self.is_user_stopped = False
         
         # 버튼 UI 잠금
         self.start_btn.config(state=tk.DISABLED)
@@ -688,6 +690,7 @@ class RpaGuiApp:
             if messagebox.askyesno('중지 확인', '진행 중인 요금수정을 중지하시겠습니까?'):
                 self.is_running = False
                 self.is_paused = False
+                self.is_user_stopped = True
                 self.pause_btn.config(state=tk.DISABLED)
                 self.stop_btn.config(state=tk.DISABLED, text='중지 중...')
                 self.set_status('중지 요청됨 · 현재 단계 정리 중', self.accent_red)
@@ -1113,6 +1116,10 @@ class RpaGuiApp:
         # 콘솔 화면(ScrolledText) 출력
         print(report_str)
         
+        # 사용자가 수동으로 중단한 경우 결과 팝업창을 띄우지 않는다.
+        if getattr(self, 'is_user_stopped', False):
+            return
+            
         # 알림 팝업 창 노출
         def show_popup():
             msg_box = tk.Toplevel(self.root)
