@@ -112,13 +112,15 @@ def filter_fares_by_date(fares_data, mode="ALL", value=""):
     날짜 필터를 적용하여 처리 대상 행만 반환합니다.
 
     mode:
-        "ALL"       — 전체 행 (필터 없음)
-        "FROM_DATE" — value 이후 날짜만 (value 포함)
-        "SPECIFIC"  — 콤마 구분 날짜 목록에 해당하는 행만
+        "ALL"        — 전체 행 (필터 없음)
+        "FROM_DATE"  — value 이후 날짜만 (value 포함)
+        "SPECIFIC"   — 콤마 구분 날짜 목록에 해당하는 행만
+        "DATE_RANGE" — 물결표(~) 구분 시작일~종료일 범위 내 행만
 
     value:
         FROM_DATE 일 때: "2025-06-01"
         SPECIFIC 일 때: "2025-01-01, 2025-01-05, 2025-03-10"
+        DATE_RANGE 일 때: "2026-06-01~2026-06-10" 또는 "20260601~20260610"
     """
     if not fares_data:
         return fares_data
@@ -146,6 +148,34 @@ def filter_fares_by_date(fares_data, mode="ALL", value=""):
         filtered = [r for r in fares_data if r["date"] in target_dates]
         print(f"[날짜 필터] 지정 날짜 {len(target_dates)}개 중 → {len(filtered)}건 대상")
         return filtered
+
+    if mode == "DATE_RANGE":
+        parts = []
+        if "~" in value:
+            parts = value.split("~")
+        elif " - " in value: # YYYY-MM-DD - YYYY-MM-DD
+            parts = value.split(" - ")
+        else:
+            # 공백 구분 시도 (두 단어인 경우)
+            sp = value.split()
+            if len(sp) == 2:
+                parts = sp
+
+        if len(parts) >= 2:
+            start_raw = parts[0].strip().replace('/', '-').replace('.', '-')
+            end_raw = parts[1].strip().replace('/', '-').replace('.', '-')
+            # YYYYMMDD 변환
+            if len(start_raw) == 8 and start_raw.isdigit():
+                start_raw = f"{start_raw[:4]}-{start_raw[4:6]}-{start_raw[6:]}"
+            if len(end_raw) == 8 and end_raw.isdigit():
+                end_raw = f"{end_raw[:4]}-{end_raw[4:6]}-{end_raw[6:]}"
+            
+            filtered = [r for r in fares_data if start_raw <= r["date"] <= end_raw]
+            print(f"[날짜 필터] 기간 지정 {start_raw} ~ {end_raw} → {len(filtered)}건 대상")
+            return filtered
+        else:
+            print(f"[경고] 기간 범위 형식이 올바르지 않습니다: {value} (구분자 ~ 필요)")
+            return []
 
     return fares_data
 

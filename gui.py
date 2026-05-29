@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.10"
+APP_VERSION = "v1.1.11"
 UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
 
 def get_app_dir():
@@ -146,8 +146,10 @@ class RpaGuiApp:
         self.console_redirector = None
         
         # 날짜 필터 관리 변수
-        self.filter_mode = tk.StringVar(value="ALL") # ALL, FROM_DATE, SPECIFIC
+        self.filter_mode = tk.StringVar(value="ALL") # ALL, FROM_DATE, SPECIFIC, DATE_RANGE
         self.filter_value = tk.StringVar(value="")
+        self.filter_mode.trace_add("write", self._on_filter_mode_change)
+        self.filter_value.trace_add("write", self._on_filter_value_change)
 
         # 로딩 애니메이션 상태
         self._loading_frames = []
@@ -156,6 +158,7 @@ class RpaGuiApp:
         self._loading_overlay = None
 
         self.build_ui()
+        self._on_filter_mode_change()
         self.sync_config_to_ui()
         self._load_loading_frames()
         self.root.after(800, self.check_for_updates_on_startup)
@@ -550,6 +553,9 @@ class RpaGuiApp:
         rad_specific = tk.Radiobutton(filter_modes_frame, text="특정 날짜 지정", variable=self.filter_mode, value="SPECIFIC", bg=self.card_color, fg=self.fg_color, selectcolor=self.card_color, activebackground=self.card_color, activeforeground=self.fg_color)
         rad_specific.pack(side=tk.LEFT, padx=10)
         
+        rad_range = tk.Radiobutton(filter_modes_frame, text="기간 범위 지정", variable=self.filter_mode, value="DATE_RANGE", bg=self.card_color, fg=self.fg_color, selectcolor=self.card_color, activebackground=self.card_color, activeforeground=self.fg_color)
+        rad_range.pack(side=tk.LEFT, padx=10)
+        
         # 필터 값 입력 행
         filter_val_lbl = tk.Label(settings_frame, text='필터 값 입력', font=('맑은 고딕', 9), bg=self.card_color, fg=self.fg_color)
         filter_val_lbl.grid(row=2, column=0, padx=10, pady=(5, 10), sticky=tk.W)
@@ -557,8 +563,8 @@ class RpaGuiApp:
         self.filter_val_entry = tk.Entry(settings_frame, textvariable=self.filter_value, width=40, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
         self.filter_val_entry.grid(row=2, column=1, padx=5, pady=(5, 10), ipady=4, sticky=tk.W)
         
-        filter_tip_lbl = tk.Label(settings_frame, text='(예: 2026-06-07 또는 20260607, 20260608)', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
-        filter_tip_lbl.grid(row=2, column=1, columnspan=2, padx=(300, 0), pady=(5, 10), sticky=tk.W)
+        self.filter_tip_lbl = tk.Label(settings_frame, text='', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
+        self.filter_tip_lbl.grid(row=2, column=1, columnspan=2, padx=(300, 0), pady=(5, 10), sticky=tk.W)
 
         # 3. 진행 상태 바 영역
         progress_frame = tk.Frame(self.root, bg=self.bg_color)
@@ -641,6 +647,36 @@ class RpaGuiApp:
         except Exception as e:
             self.set_status(f'엑셀 파싱 실패 - {str(e)}', self.accent_red)
             self.fares_data = []
+
+    def _on_filter_mode_change(self, *args):
+        try:
+            if not hasattr(self, 'filter_tip_lbl') or not hasattr(self, 'filter_val_entry'):
+                return
+            mode = self.filter_mode.get()
+            if mode == "ALL":
+                self.filter_tip_lbl.config(text="")
+                self.filter_val_entry.config(state=tk.DISABLED)
+                if self.filter_value.get() != "":
+                    self.filter_value.set("")
+            elif mode == "FROM_DATE":
+                self.filter_tip_lbl.config(text="(예: 2026-06-07 또는 20260607)")
+                self.filter_val_entry.config(state=tk.NORMAL)
+            elif mode == "SPECIFIC":
+                self.filter_tip_lbl.config(text="(예: 2026-06-07, 2026-06-08 - 콤마 구분)")
+                self.filter_val_entry.config(state=tk.NORMAL)
+            elif mode == "DATE_RANGE":
+                self.filter_tip_lbl.config(text="(예: 20260601~20260610 - 물결표 구분)")
+                self.filter_val_entry.config(state=tk.NORMAL)
+            
+            self.load_excel_data()
+        except Exception:
+            pass
+
+    def _on_filter_value_change(self, *args):
+        try:
+            self.load_excel_data()
+        except Exception:
+            pass
 
     def start_rpa(self):
         self.excel_path = self.excel_entry.get().strip()
