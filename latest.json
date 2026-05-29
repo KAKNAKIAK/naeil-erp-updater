@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.11",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.11/NaeilERPUpdater_Setup_v1.1.11.exe",
-  "sha256": "FBDA5D7F8E38A04A445EDEAAE95940BB53EB120B2C5E8E8E84A2AC1261A36A3B",
+  "version": "v1.1.12",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.12/NaeilERPUpdater_Setup_v1.1.12.exe",
+  "sha256": "22F33F9F16C88AD957D4D30EC62CD6AA2958901F0DA278397523649E9B19717F",
   "notes": [
-    "특정날짜 지정 필터 내에 기간 범위 지정(DATE_RANGE) 옵션 추가"
+    "특정날짜 지정 필터 내에 기간 범위 지정 시 시작일과 종료일 입력란 분리 적용"
   ]
 }
