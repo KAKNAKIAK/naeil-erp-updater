@@ -52,8 +52,9 @@ exe = EXE(
 updater_exe = EXE(
     updater_pyz,
     updater_a.scripts,
+    updater_a.binaries,
+    updater_a.datas,
     [],
-    exclude_binaries=True,
     name='UpdateHelper',
     debug=False,
     bootloader_ignore_signals=False,
@@ -69,13 +70,17 @@ updater_exe = EXE(
 )
 coll = COLLECT(
     exe,
-    updater_exe,
     a.binaries,
     a.datas,
-    updater_a.binaries,
-    updater_a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
     name='NaeilERPUpdater',
+)
+
+import shutil
+import os
+shutil.copy2(
+    os.path.join(DISTPATH, 'UpdateHelper.exe'),
+    os.path.join(DISTPATH, 'NaeilERPUpdater', 'UpdateHelper.exe')
 )
