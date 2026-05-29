@@ -1,7 +1,7 @@
 {
   "version": "v1.1.15",
   "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.15/NaeilERPUpdater_Setup_v1.1.15.exe",
-  "sha256": "8EEE8043AB63081A210A39A888AAA233BFCA16833A7E6A4EFB0B391A7BA13197",
+  "sha256": "47F16251F352F6111E56EFDE5D05912AAB2499A6F40DD4937B6D6DC15D8EF9D4",
   "notes": [
     "업데이트 도우미 파일명을 UpdateHelper.exe로 변경하고 전용 아이콘을 적용하여 메인 프로그램과의 헷갈림 현상 방지"
   ]
