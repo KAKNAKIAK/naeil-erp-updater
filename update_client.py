@@ -66,6 +66,11 @@ def fetch_latest_manifest(latest_url, timeout=8):
     if not latest_url:
         raise UpdateError("업데이트 확인 URL이 비어 있습니다.")
 
+    if "raw.githubusercontent.com" in latest_url:
+        import time
+        sep = "&" if "?" in latest_url else "?"
+        latest_url = f"{latest_url}{sep}t={int(time.time())}"
+
     try:
         raw = _read_url(latest_url, timeout)
         manifest = _decode_manifest_json(raw)
