@@ -1,8 +1,9 @@
 {
-  "version": "v1.1.6",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.6/NaeilERPUpdater_Setup_v1.1.6.exe",
-  "sha256": "BFCD5434D5BAFF10F1B0F124FD27AEDB3EC9CAE7F24E23266AE7C8427DEAF040",
+  "version": "v1.1.7",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.7/NaeilERPUpdater_Setup_v1.1.7.exe",
+  "sha256": "B0264AAE19C979D5533EC41279B739A1753D978F7C1BC03E1B4B49E9C7682C95",
   "notes": [
+    "GitHub Contents API 기반 latest.json 확인으로 업데이트 매니페스트 캐시 지연 대응",
     "RPA 작업 중 중지 시 결과 보고서 팝업이 노출되는 현상 수정"
   ]
 }

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "v1.1.6"
+$Version = "v1.1.7"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $ReleaseDir = Join-Path $ReleaseRoot "NaeilERPUpdater"
@@ -19,10 +19,6 @@ function Reset-TempDir {
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
-}
-
-if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir "NaeilERPUpdater.exe"))) {
-    throw "Portable release was not found: $ReleaseDir"
 }
 
 $PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -48,13 +44,41 @@ try {
         }
     }
 
+    $PortableSourceDir = $ReleaseDir
+    if (-not (Test-Path -LiteralPath (Join-Path $PortableSourceDir "NaeilERPUpdater.exe"))) {
+        Write-Host "[1/4] Portable release not found; building onedir app in temp..."
+        $TempPortableRoot = Join-Path ([System.IO.Path]::GetTempPath()) "NaeilERPUpdaterPortableBuild"
+        $TempPortableDist = Join-Path $TempPortableRoot "dist"
+        $TempPortableBuild = Join-Path $TempPortableRoot "build"
+        Reset-TempDir -Path $TempPortableRoot
+
+        & $PythonExe -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --distpath $TempPortableDist `
+            --workpath $TempPortableBuild `
+            (Join-Path $ProjectRoot "NaeilERPUpdater.spec")
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Portable app build failed."
+        }
+
+        $PortableSourceDir = Join-Path $TempPortableDist "NaeilERPUpdater"
+        if (-not (Test-Path -LiteralPath (Join-Path $PortableSourceDir "NaeilERPUpdater.exe"))) {
+            throw "Built portable release was not found: $PortableSourceDir"
+        }
+
+        Copy-Item -LiteralPath (Join-Path $ProjectRoot "config.json") -Destination $PortableSourceDir -Force
+        Copy-Item -LiteralPath (Join-Path $ProjectRoot "chrome_debug.bat") -Destination $PortableSourceDir -Force
+    }
+
     Write-Host "[2/4] Creating setup payload..."
     Reset-TempDir -Path $TempInstallerDir
     
     # Exclude temporary cache and profile directories to avoid file locks
     $PayloadSrc = Join-Path $TempInstallerDir "payload"
     New-Item -ItemType Directory -Force -Path $PayloadSrc | Out-Null
-    Copy-Item -Path (Join-Path $ReleaseDir "*") -Destination $PayloadSrc -Recurse -Force -Exclude "ChromeProfile", "logs"
+    Copy-Item -Path (Join-Path $PortableSourceDir "*") -Destination $PayloadSrc -Recurse -Force -Exclude "ChromeProfile", "logs"
     
     $PayloadZip = Join-Path $TempInstallerDir "payload.zip"
     Compress-Archive -Path (Join-Path $PayloadSrc "*") -DestinationPath $PayloadZip -Force

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import hashlib
+import base64
 import json
 import os
 import re
@@ -48,13 +49,26 @@ def _read_url(url, timeout):
     return content
 
 
+def _decode_manifest_json(raw):
+    payload = json.loads(raw.decode("utf-8-sig"))
+    if (
+        isinstance(payload, dict)
+        and payload.get("encoding") == "base64"
+        and isinstance(payload.get("content"), str)
+    ):
+        content = payload["content"].replace("\n", "")
+        decoded = base64.b64decode(content)
+        return json.loads(decoded.decode("utf-8-sig"))
+    return payload
+
+
 def fetch_latest_manifest(latest_url, timeout=8):
     if not latest_url:
         raise UpdateError("업데이트 확인 URL이 비어 있습니다.")
 
     try:
         raw = _read_url(latest_url, timeout)
-        manifest = json.loads(raw.decode("utf-8-sig"))
+        manifest = _decode_manifest_json(raw)
     except UpdateError:
         raise
     except Exception as exc:

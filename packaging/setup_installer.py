@@ -27,7 +27,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v1.1.6"
+APP_VERSION = "v1.1.7"
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
 # Windows '앱 및 기능' 등록 키 (현재 사용자 범위)

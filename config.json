@@ -9,7 +9,7 @@
   "history_log_path": "logs/update_history.csv",
   "screenshot_dir": "logs/screenshots",
   "update_enabled": true,
-  "update_latest_url": "https://raw.githubusercontent.com/KAKNAKIAK/naeil-erp-updater/main/latest.json",
+  "update_latest_url": "https://api.github.com/repos/KAKNAKIAK/naeil-erp-updater/contents/latest.json?ref=main",
   "update_check_timeout": 8,
   "update_download_timeout": 30,
   "selectors": {

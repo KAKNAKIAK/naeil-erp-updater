@@ -9,7 +9,7 @@
 현재 연결된 manifest:
 
 ```text
-https://raw.githubusercontent.com/KAKNAKIAK/naeil-erp-updater/main/latest.json
+https://api.github.com/repos/KAKNAKIAK/naeil-erp-updater/contents/latest.json?ref=main
 ```
 
 배포 절차:
