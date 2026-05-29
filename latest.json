@@ -1,8 +1,8 @@
-{
-  "version": "v1.1.17",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.17/NaeilERPUpdater_Setup_v1.1.17.exe",
-  "sha256": "8B0D7B93579224C07A364B0C96C6A782755C3DE26B27A95BB33E2274CB6AD954",
-  "notes": [
-    "요금수정 시작 시 내부 오류로 작업이 시작되지 않던 문제 수정(없어진 필터 입력칸 참조 제거)"
-  ]
+﻿{
+    "version":  "v1.1.18",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.18/",
+    "sha256":  "B99903CB39E468BF07DC0B9C197283DA7BE5F2054A75FB9912A517A02847AF05",
+    "notes":  [
+                  "상단에 \u0027요금조회 사이트가기\u0027 바로가기 버튼 추가"
+              ]
 }
