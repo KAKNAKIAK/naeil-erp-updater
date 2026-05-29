@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.14",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.14/NaeilERPUpdater_Setup_v1.1.14.exe",
+  "version": "v1.1.15",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.15/NaeilERPUpdater_Setup_v1.1.15.exe",
   "sha256": "8EEE8043AB63081A210A39A888AAA233BFCA16833A7E6A4EFB0B391A7BA13197",
   "notes": [
-    "아동 요금(C열)이 누락되었거나 오류값(텍스트)인 경우 0원으로 대체 처리하여 정상 동작하도록 예외 처리 수정"
+    "업데이트 도우미 파일명을 UpdateHelper.exe로 변경하고 전용 아이콘을 적용하여 메인 프로그램과의 헷갈림 현상 방지"
   ]
 }

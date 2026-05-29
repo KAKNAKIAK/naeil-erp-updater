@@ -25,8 +25,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.14"
-UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
+APP_VERSION = "v1.1.15"
+UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 def get_app_dir():
     """실행 파일 또는 소스 파일 옆의 쓰기 가능한 폴더 경로를 반환합니다."""

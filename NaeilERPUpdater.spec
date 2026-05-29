@@ -54,7 +54,7 @@ updater_exe = EXE(
     updater_a.scripts,
     [],
     exclude_binaries=True,
-    name='NaeilERPUpdaterUpdater',
+    name='UpdateHelper',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -65,7 +65,7 @@ updater_exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='app_icon.ico',
+    icon='helper_icon.ico',
 )
 coll = COLLECT(
     exe,
