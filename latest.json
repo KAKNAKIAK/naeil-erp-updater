@@ -1,0 +1,10 @@
+{
+  "version": "v1.1.5",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.5/ERP%20%ED%95%AD%EA%B3%B5%EC%9A%94%EA%B8%88%EC%88%98%EC%A0%95_%EB%B0%B0%ED%8F%AC%EC%9A%A9_v1.1.5.exe",
+  "sha256": "F17ECC5AE193E93F49E24DEAC47690F1B51DE621B17BCD5DE779BEEBA1BAFDEF",
+  "notes": [
+    "앱 시작 시 GitHub latest.json 기반 자동 업데이트 확인",
+    "업데이트 설치본 SHA256 검증 후 별도 updater 프로세스로 silent 설치",
+    "설치 완료 후 새 NaeilERPUpdater.exe 자동 재실행"
+  ]
+}

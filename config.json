@@ -1,0 +1,30 @@
+{
+  "headless": false,
+  "dry_run": false,
+  "timeout": 25,
+  "login_timeout": 180,
+  "use_existing_browser": true,
+  "debugger_address": "127.0.0.1:9222",
+  "erp_url": "http://erp.naeiltour.co.kr",
+  "history_log_path": "logs/update_history.csv",
+  "screenshot_dir": "logs/screenshots",
+  "update_enabled": true,
+  "update_latest_url": "https://raw.githubusercontent.com/KAKNAKIAK/naeil-erp-updater/main/latest.json",
+  "update_check_timeout": 8,
+  "update_download_timeout": 30,
+  "selectors": {
+    "login_id": "input[name='userId']",
+    "login_pw": "input[name='userPw']",
+    "login_btn": "#btnLogin",
+    "search_date_input": "#searchStDate",
+    "search_date_end_input": "#searchEnDate",
+    "search_button": "#gridMain_r",
+    "header_all_checkbox": "td.aui-grid-row-check-header input",
+    "update_button": "#priceUpdate",
+    "adult_fare_input": "#addAir01",
+    "child_fare_input": "#addProfit41",
+    "save_button": "#priceSave",
+    "cancel_button": "#popCloseBtn",
+    "date_cell_in_row": ".aui-grid-default-column"
+  }
+}

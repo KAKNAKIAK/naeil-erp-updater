@@ -1,0 +1,14 @@
+.venv/
+ChromeProfile/
+release/
+build/
+dist/
+logs/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.bak
+*.spec.bak
+recovered/
+
