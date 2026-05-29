@@ -44,33 +44,40 @@ try {
         }
     }
 
-    $PortableSourceDir = $ReleaseDir
-    if (-not (Test-Path -LiteralPath (Join-Path $PortableSourceDir "NaeilERPUpdater.exe"))) {
-        Write-Host "[1/4] Portable release not found; building onedir app in temp..."
-        $TempPortableRoot = Join-Path ([System.IO.Path]::GetTempPath()) "NaeilERPUpdaterPortableBuild"
-        $TempPortableDist = Join-Path $TempPortableRoot "dist"
-        $TempPortableBuild = Join-Path $TempPortableRoot "build"
-        Reset-TempDir -Path $TempPortableRoot
-
-        & $PythonExe -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --distpath $TempPortableDist `
-            --workpath $TempPortableBuild `
-            (Join-Path $ProjectRoot "NaeilERPUpdater.spec")
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Portable app build failed."
-        }
-
-        $PortableSourceDir = Join-Path $TempPortableDist "NaeilERPUpdater"
-        if (-not (Test-Path -LiteralPath (Join-Path $PortableSourceDir "NaeilERPUpdater.exe"))) {
-            throw "Built portable release was not found: $PortableSourceDir"
-        }
-
-        Copy-Item -LiteralPath (Join-Path $ProjectRoot "config.json") -Destination $PortableSourceDir -Force
-        Copy-Item -LiteralPath (Join-Path $ProjectRoot "chrome_debug.bat") -Destination $PortableSourceDir -Force
+    Write-Host "[1/4] Building portable release (onedir)..."
+    if (Test-Path -LiteralPath $ReleaseDir) {
+        Remove-Item -LiteralPath $ReleaseDir -Recurse -Force -ErrorAction SilentlyContinue
     }
+    
+    $TempPortableRoot = Join-Path ([System.IO.Path]::GetTempPath()) "NaeilERPUpdaterPortableBuild"
+    $TempPortableDist = Join-Path $TempPortableRoot "dist"
+    $TempPortableBuild = Join-Path $TempPortableRoot "build"
+    Reset-TempDir -Path $TempPortableRoot
+
+    & $PythonExe -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --distpath $TempPortableDist `
+        --workpath $TempPortableBuild `
+        (Join-Path $ProjectRoot "NaeilERPUpdater.spec")
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable app build failed."
+    }
+
+    $PortableSourceDir = Join-Path $TempPortableDist "NaeilERPUpdater"
+    if (-not (Test-Path -LiteralPath (Join-Path $PortableSourceDir "NaeilERPUpdater.exe"))) {
+        throw "Built portable release was not found: $PortableSourceDir"
+    }
+
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "config.json") -Destination $PortableSourceDir -Force
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "chrome_debug.bat") -Destination $PortableSourceDir -Force
+
+    # Copy to release folder for synchronization
+    if (-not (Test-Path -LiteralPath $ReleaseRoot)) {
+        New-Item -ItemType Directory -Force -Path $ReleaseRoot | Out-Null
+    }
+    Copy-Item -Path $PortableSourceDir -Destination $ReleaseRoot -Recurse -Force
 
     Write-Host "[2/4] Creating setup payload..."
     Reset-TempDir -Path $TempInstallerDir
