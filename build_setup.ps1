@@ -118,11 +118,16 @@ try {
     if (Test-Path -LiteralPath $LatestTemplate) {
         $LatestOut = Join-Path $ReleaseRoot "latest.json"
         $SetupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupOut).Hash
-        $DownloadUrl = "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/$Version/NaeilERPUpdater_Setup_$Version.exe"
+        $DownloadUrl = "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/{0}/NaeilERPUpdater_Setup_{0}.exe" -f $Version
+        if ($DownloadUrl -notmatch '/NaeilERPUpdater_Setup_.+\.exe$') { throw "download_url 생성 오류(파일명 누락): '$DownloadUrl'" }
         $Latest = Get-Content -LiteralPath $LatestTemplate -Raw -Encoding UTF8 | ConvertFrom-Json
         $Latest.version = $Version
         $Latest.download_url = $DownloadUrl
         $Latest.sha256 = $SetupHash
+        # 가드: 깨진 매니페스트를 쓰지 않는다
+        if ($Latest.download_url -notmatch '\.exe$' -or $Latest.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "latest.json 값 비정상 (url='$($Latest.download_url)', sha='$($Latest.sha256)')"
+        }
         $Json = $Latest | ConvertTo-Json -Depth 10
         # 루트(푸시 대상)와 release 사본을 모두 동기화 -> 해시 불일치 영구 방지
         Set-Content -LiteralPath $LatestOut -Value $Json -Encoding UTF8

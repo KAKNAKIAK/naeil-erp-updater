@@ -68,7 +68,10 @@ if ($LASTEXITCODE -ne 0) { throw "GitHub 릴리스 업로드 실패" }
 
 # 3) 매니페스트 SHA256 = 방금 업로드한 그 파일(로컬 빌드 설치본)의 해시.
 #    gh 는 바이트를 그대로 업로드하므로 "로컬 설치본 해시 == 사용자가 받는 자산 해시".
-$DownloadUrl = "https://github.com/$Repo/releases/download/$Version/$AssetName"
+$DownloadUrl = "https://github.com/{0}/releases/download/{1}/{2}" -f $Repo, $Version, $AssetName
+if ($DownloadUrl -notmatch '/NaeilERPUpdater_Setup_.+\.exe$') {
+    throw "download_url 생성 오류(파일명 누락): '$DownloadUrl'  (AssetName='$AssetName', Version='$Version')"
+}
 $AssetHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash
 Write-Host ("[publish] 설치본 SHA256(로컬=업로드 자산): {0}" -f $AssetHash)
 
@@ -108,6 +111,10 @@ $j = Get-Content -LiteralPath $RootLatest -Raw -Encoding UTF8 | ConvertFrom-Json
 $j.version = $Version
 $j.download_url = $DownloadUrl
 $j.sha256 = $AssetHash
+# 푸시 직전 최종 가드 — 깨진 매니페스트는 절대 커밋/푸시하지 않는다
+if ($j.download_url -notmatch '/NaeilERPUpdater_Setup_.+\.exe$') { throw "latest.json download_url 비정상: '$($j.download_url)'" }
+if ($j.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "latest.json sha256 비정상: '$($j.sha256)'" }
+if ($j.version -ne $Version) { throw "latest.json version 불일치: '$($j.version)' != '$Version'" }
 ($j | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $RootLatest -Encoding UTF8
 Write-Host "[publish] 루트 latest.json 동기화 완료"
 
