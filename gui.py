@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.11"
+APP_VERSION = "v1.1.12"
 UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
 
 def get_app_dir():
@@ -148,8 +148,10 @@ class RpaGuiApp:
         # 날짜 필터 관리 변수
         self.filter_mode = tk.StringVar(value="ALL") # ALL, FROM_DATE, SPECIFIC, DATE_RANGE
         self.filter_value = tk.StringVar(value="")
+        self.filter_value_end = tk.StringVar(value="")
         self.filter_mode.trace_add("write", self._on_filter_mode_change)
         self.filter_value.trace_add("write", self._on_filter_value_change)
+        self.filter_value_end.trace_add("write", self._on_filter_value_change)
 
         # 로딩 애니메이션 상태
         self._loading_frames = []
@@ -560,11 +562,11 @@ class RpaGuiApp:
         filter_val_lbl = tk.Label(settings_frame, text='필터 값 입력', font=('맑은 고딕', 9), bg=self.card_color, fg=self.fg_color)
         filter_val_lbl.grid(row=2, column=0, padx=10, pady=(5, 10), sticky=tk.W)
 
-        self.filter_val_entry = tk.Entry(settings_frame, textvariable=self.filter_value, width=40, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
-        self.filter_val_entry.grid(row=2, column=1, padx=5, pady=(5, 10), ipady=4, sticky=tk.W)
+        self.filter_input_container = tk.Frame(settings_frame, bg=self.card_color)
+        self.filter_input_container.grid(row=2, column=1, padx=5, pady=(5, 10), sticky=tk.W)
         
         self.filter_tip_lbl = tk.Label(settings_frame, text='', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
-        self.filter_tip_lbl.grid(row=2, column=1, columnspan=2, padx=(300, 0), pady=(5, 10), sticky=tk.W)
+        self.filter_tip_lbl.grid(row=2, column=1, columnspan=2, padx=(330, 0), pady=(5, 10), sticky=tk.W)
 
         # 3. 진행 상태 바 영역
         progress_frame = tk.Frame(self.root, bg=self.bg_color)
@@ -631,7 +633,10 @@ class RpaGuiApp:
 
             # 필터 옵션 적용
             mode = self.filter_mode.get()
-            val = self.filter_value.get().strip()
+            if mode == "DATE_RANGE":
+                val = f"{self.filter_value.get().strip()}~{self.filter_value_end.get().strip()}"
+            else:
+                val = self.filter_value.get().strip()
             self.fares_data = excel_loader.filter_fares_by_date(raw_data, mode, val)
 
             if self.fares_data:
@@ -650,23 +655,45 @@ class RpaGuiApp:
 
     def _on_filter_mode_change(self, *args):
         try:
-            if not hasattr(self, 'filter_tip_lbl') or not hasattr(self, 'filter_val_entry'):
+            if not hasattr(self, 'filter_input_container') or not hasattr(self, 'filter_tip_lbl'):
                 return
+            
+            # 기존 위젯 제거
+            for widget in self.filter_input_container.winfo_children():
+                widget.destroy()
+
             mode = self.filter_mode.get()
+            
             if mode == "ALL":
                 self.filter_tip_lbl.config(text="")
-                self.filter_val_entry.config(state=tk.DISABLED)
+                entry = tk.Entry(self.filter_input_container, state=tk.DISABLED, width=40, bg=self.bg_color, fg=self.fg_color, highlightbackground=self.border_color, highlightthickness=1, bd=0)
+                entry.pack(side=tk.LEFT, ipady=4)
                 if self.filter_value.get() != "":
                     self.filter_value.set("")
+                if self.filter_value_end.get() != "":
+                    self.filter_value_end.set("")
             elif mode == "FROM_DATE":
                 self.filter_tip_lbl.config(text="(예: 2026-06-07 또는 20260607)")
-                self.filter_val_entry.config(state=tk.NORMAL)
+                entry = tk.Entry(self.filter_input_container, textvariable=self.filter_value, width=40, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
+                entry.pack(side=tk.LEFT, ipady=4)
             elif mode == "SPECIFIC":
                 self.filter_tip_lbl.config(text="(예: 2026-06-07, 2026-06-08 - 콤마 구분)")
-                self.filter_val_entry.config(state=tk.NORMAL)
+                entry = tk.Entry(self.filter_input_container, textvariable=self.filter_value, width=40, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
+                entry.pack(side=tk.LEFT, ipady=4)
             elif mode == "DATE_RANGE":
-                self.filter_tip_lbl.config(text="(예: 20260601~20260610 - 물결표 구분)")
-                self.filter_val_entry.config(state=tk.NORMAL)
+                self.filter_tip_lbl.config(text="(시작일 / 종료일 입력)")
+                
+                # 시작일 입력
+                start_entry = tk.Entry(self.filter_input_container, textvariable=self.filter_value, width=18, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
+                start_entry.pack(side=tk.LEFT, ipady=4)
+                
+                # 물결 구분 표시
+                tilde_lbl = tk.Label(self.filter_input_container, text=" ~ ", font=('맑은 고딕', 10, 'bold'), bg=self.card_color, fg=self.fg_color)
+                tilde_lbl.pack(side=tk.LEFT, padx=3)
+                
+                # 종료일 입력
+                end_entry = tk.Entry(self.filter_input_container, textvariable=self.filter_value_end, width=18, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
+                end_entry.pack(side=tk.LEFT, ipady=4)
             
             self.load_excel_data()
         except Exception:
