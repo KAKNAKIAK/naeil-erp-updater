@@ -1,8 +1,8 @@
 ﻿{
-    "version":  "v1.1.18",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.18/NaeilERPUpdater_Setup_v1.1.18.exe",
-    "sha256":  "B99903CB39E468BF07DC0B9C197283DA7BE5F2054A75FB9912A517A02847AF05",
+    "version":  "v1.1.19",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.19/NaeilERPUpdater_Setup_v1.1.19.exe",
+    "sha256":  "A06397F0BAFF8D379C9131398F696A65E03CF5FE8860F0DF5A11792ED3B9BD10",
     "notes":  [
-                  "상단에 \u0027요금조회 사이트가기\u0027 바로가기 버튼 추가"
+                  "작업 완료 후 뜨던 결과 요약 팝업 제거(요약은 작업 내용 로그에 그대로 표시)"
               ]
 }

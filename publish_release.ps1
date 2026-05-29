@@ -51,7 +51,8 @@ if (-not (Test-Path -LiteralPath $Setup)) {
 }
 
 # 2) 릴리스 생성/업로드
-$AssetName = "NaeilERPUpdater_Setup_{0}.exe" -f $Version
+# 자산 파일명은 실제 빌드 산출물($Setup)에서 떼온다 (확실)
+$AssetName = Split-Path -Leaf $Setup
 $ErrorActionPreference = "Continue"
 gh release view $Version --repo $Repo *> $null
 $releaseExists = ($LASTEXITCODE -eq 0)

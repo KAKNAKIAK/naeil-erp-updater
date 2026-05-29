@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.18"
+APP_VERSION = "v1.1.19"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 def get_app_dir():
@@ -1210,34 +1210,9 @@ class RpaGuiApp:
         
         report_str = "\n".join(report)
         
-        # 콘솔 화면(ScrolledText) 출력
+        # 결과 요약은 아래 '실시간 작업 내용' 로그에만 출력한다.
+        # (모달 결과 요약 팝업은 사용자 요청으로 제거됨 — 로그 요약과 중복이라 불필요)
         print(report_str)
-        
-        # 사용자가 수동으로 중단한 경우 결과 팝업창을 띄우지 않는다.
-        if getattr(self, 'is_user_stopped', False):
-            return
-            
-        # 알림 팝업 창 노출
-        def show_popup():
-            msg_box = tk.Toplevel(self.root)
-            msg_box.title("요금 수정 작업 결과 요약")
-            msg_box.geometry("600x500")
-            msg_box.configure(bg=self.bg_color)
-            msg_box.transient(self.root)
-            msg_box.grab_set()
-            
-            lbl = tk.Label(msg_box, text="[작업 완료] 결과 요약 보고서", font=('맑은 고딕', 12, 'bold'), bg=self.bg_color, fg=self.fg_color, pady=10)
-            lbl.pack()
-            
-            txt = ScrolledText(msg_box, bg='#0d0d0f', fg='#c5c5cb', font=('Consolas', 9.5), bd=1, relief=tk.SOLID)
-            txt.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
-            txt.insert(tk.END, report_str)
-            txt.config(state=tk.DISABLED)
-            
-            btn = tk.Button(msg_box, text="확인", width=12, bg=self.accent_color, fg='white', font=('맑은 고딕', 9, 'bold'), bd=0, command=msg_box.destroy)
-            btn.pack(pady=(0, 15))
-            
-        self.root.after(0, show_popup)
 
 def _acquire_single_instance_lock():
     """중복 실행 방지용 Windows 네임드 뮤텍스를 잡는다.
