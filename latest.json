@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.10",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.10/NaeilERPUpdater_Setup_v1.1.10.exe",
-  "sha256": "CF8DE91B4B84FE57B53CDFA86891CA20EFB82504C56F6062727B27E29BBAB1FD",
+  "version": "v1.1.11",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.11/NaeilERPUpdater_Setup_v1.1.11.exe",
+  "sha256": "FBDA5D7F8E38A04A445EDEAAE95940BB53EB120B2C5E8E8E84A2AC1261A36A3B",
   "notes": [
-    "스플래시 미사용 환경에서 import pyi_splash 예외(KeyError)로 실행 안 되던 오류 수정"
+    "특정날짜 지정 필터 내에 기간 범위 지정(DATE_RANGE) 옵션 추가"
   ]
 }
