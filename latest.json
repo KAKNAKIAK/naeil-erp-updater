@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.12",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.12/NaeilERPUpdater_Setup_v1.1.12.exe",
-  "sha256": "22F33F9F16C88AD957D4D30EC62CD6AA2958901F0DA278397523649E9B19717F",
+  "version": "v1.1.13",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.13/NaeilERPUpdater_Setup_v1.1.13.exe",
+  "sha256": "D65024CBD5D970D62726AE19CEE0D7C41D6081DEDF5BDD5AD68A577C0039225B",
   "notes": [
-    "특정날짜 지정 필터 내에 기간 범위 지정 시 시작일과 종료일 입력란 분리 적용"
+    "실행 시 GUI 창 배후의 CMD 콘솔창이 뜨지 않도록 숨김 옵션 적용 및 기간 입력란 UI 안정화"
   ]
 }
