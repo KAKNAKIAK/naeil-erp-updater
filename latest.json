@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.16",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.16/NaeilERPUpdater_Setup_v1.1.16.exe",
-  "sha256": "2F5640D52F22F7B8A142EE283417A14E00FAC1778963ED863F3B725B398F15D0",
+  "version": "v1.1.17",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.17/NaeilERPUpdater_Setup_v1.1.17.exe",
+  "sha256": "8B0D7B93579224C07A364B0C96C6A782755C3DE26B27A95BB33E2274CB6AD954",
   "notes": [
-    "업데이트 도우미가 임시 폴더에서 작동할 때 발생하는 DLL 로딩 에러(Failed to load Python DLL) 핫픽스"
+    "요금수정 시작 시 내부 오류로 작업이 시작되지 않던 문제 수정(없어진 필터 입력칸 참조 제거)"
   ]
 }

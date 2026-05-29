@@ -2,7 +2,7 @@
 """스플래시 이미지 생성기 (앱용 / 설치용). 버전 변경 시 VERSION만 고치고 재실행."""
 from PIL import Image, ImageDraw, ImageFont
 
-VERSION = "v1.1.16"
+VERSION = "v1.1.17"
 W, H = 480, 270
 
 BG = (21, 22, 28)          # #15161c

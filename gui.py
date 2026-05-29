@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.16"
+APP_VERSION = "v1.1.17"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 def get_app_dir():
@@ -705,6 +705,20 @@ class RpaGuiApp:
         except Exception:
             pass
 
+    def _set_filter_inputs_state(self, state):
+        """동적 날짜 필터 입력칸(Entry)들의 활성/비활성을 토글한다.
+        필터 입력 위젯은 모드에 따라 동적 생성되므로 컨테이너 자식을 순회한다."""
+        try:
+            if hasattr(self, 'filter_input_container'):
+                for w in self.filter_input_container.winfo_children():
+                    if isinstance(w, tk.Entry):
+                        try:
+                            w.config(state=state)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
     def start_rpa(self):
         self.excel_path = self.excel_entry.get().strip()
         if not self.excel_path:
@@ -725,7 +739,7 @@ class RpaGuiApp:
         self.pause_btn.config(state=tk.NORMAL, text='‖  일시 중지', bg=self.accent_orange)
         self.stop_btn.config(state=tk.NORMAL)
         self.excel_entry.config(state=tk.DISABLED)
-        self.filter_val_entry.config(state=tk.DISABLED)
+        self._set_filter_inputs_state(tk.DISABLED)
         
         self.log_txt.delete('1.0', tk.END)
         self.old_stdout = sys.stdout
@@ -771,7 +785,7 @@ class RpaGuiApp:
         self.pause_btn.config(state=tk.DISABLED, text='‖  일시 중지', bg=self.accent_orange)
         self.stop_btn.config(state=tk.DISABLED, text='■  중지')
         self.excel_entry.config(state=tk.NORMAL)
-        self.filter_val_entry.config(state=tk.NORMAL)
+        self._set_filter_inputs_state(tk.NORMAL)
         self.progress_bar['value'] = 0
         self.progress_lbl.config(text=f'0 / {len(self.fares_data)} (0%)')
         self.is_running = False
