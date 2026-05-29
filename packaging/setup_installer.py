@@ -27,7 +27,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v1.1.7"
+APP_VERSION = "v1.1.9"
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
 # Windows '앱 및 기능' 등록 키 (현재 사용자 범위)
@@ -279,20 +279,29 @@ if (Test-Path $StartMenuDir) {{
 def _schedule_delete(install_dir):
     """실행 중인 제거기(Uninstall.exe) 자신과 설치 폴더를, 프로세스 종료 후 지운다.
 
-    Windows는 실행 중인 EXE를 삭제할 수 없으므로, 제거기가 종료될 때까지 재시도
-    하며 폴더를 지우는 분리(detached) 배치를 띄운다. 배치는 끝나면 자신을 삭제한다.
+    Windows는 실행 중인 EXE를 삭제할 수 없으므로, 제거기 프로세스(PID)가 종료될 때까지
+    대기했다가 폴더를 지우는 분리(detached) 배치를 띄운다. 배치는 끝나면 자신을 삭제한다.
     """
     detached = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    pid = os.getpid()
+    
+    # timeout 대신 ping을 지연시간으로 사용하여 콘솔창 생성을 방지하고,
+    # tasklist로 제거기 프로세스가 죽을 때까지 대기(최대 120초)한 후 rmdir을 실행합니다.
     batch = (
         "@echo off\r\n"
         "set /a n=0\r\n"
         ":loop\r\n"
         "set /a n+=1\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
+        "ping 127.0.0.1 -n 2 >nul\r\n"
+        f"tasklist /fi \"PID eq {pid}\" 2>nul | findstr /i \"{pid}\" >nul\r\n"
+        "if %errorlevel% equ 0 (\r\n"
+        "    if %n% GEQ 120 goto done\r\n"
+        "    goto loop\r\n"
+        ")\r\n"
         f'rmdir /s /q "{install_dir}" 2>nul\r\n'
         f'if not exist "{install_dir}" goto done\r\n'
-        "if %n% GEQ 60 goto done\r\n"
+        "if %n% GEQ 120 goto done\r\n"
         "goto loop\r\n"
         ":done\r\n"
         'del "%~f0"\r\n'

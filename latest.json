@@ -1,9 +1,8 @@
 {
-  "version": "v1.1.7",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.7/NaeilERPUpdater_Setup_v1.1.7.exe",
-  "sha256": "B0264AAE19C979D5533EC41279B739A1753D978F7C1BC03E1B4B49E9C7682C95",
+  "version": "v1.1.10",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.10/NaeilERPUpdater_Setup_v1.1.10.exe",
+  "sha256": "PENDING_REPLACE",
   "notes": [
-    "GitHub Contents API 기반 latest.json 확인으로 업데이트 매니페스트 캐시 지연 대응",
-    "RPA 작업 중 중지 시 결과 보고서 팝업이 노출되는 현상 수정"
+    "스플래시 미사용 환경에서 import pyi_splash 예외(KeyError)로 실행 안 되던 오류 수정"
   ]
 }

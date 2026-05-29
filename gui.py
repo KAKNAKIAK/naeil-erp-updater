@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.7"
+APP_VERSION = "v1.1.10"
 UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
 
 def get_app_dir():
@@ -1161,13 +1161,6 @@ def _acquire_single_instance_lock():
 
 
 if __name__ == "__main__":
-    # PyInstaller 스플래시(실행 직후 "로딩 중" 창)가 있으면 닫는다
-    try:
-        import pyi_splash  # type: ignore
-        pyi_splash.update_text('프로그램을 준비하고 있습니다…')
-    except Exception:
-        pyi_splash = None
-
     # 콘솔이 없는 환경(pythonw/스플래시)에서도 안전하게
     try:
         if sys.stdout is not None and getattr(sys.stdout, 'encoding', None) != 'utf-8':
@@ -1181,11 +1174,6 @@ if __name__ == "__main__":
     acquired, _mutex_handle = _acquire_single_instance_lock()
     if not acquired:
         try:
-            if 'pyi_splash' in dir() and pyi_splash:
-                pyi_splash.close()
-        except Exception:
-            pass
-        try:
             _alert = tk.Tk()
             _alert.withdraw()
             messagebox.showinfo("이미 실행 중", "프로그램이 이미 실행 중입니다.\n열려 있는 창을 확인해 주세요.")
@@ -1196,13 +1184,6 @@ if __name__ == "__main__":
 
     root_win = tk.Tk()
     app = RpaGuiApp(root_win)
-
-    # UI 준비가 끝났으니 스플래시 닫기
-    try:
-        if pyi_splash:
-            pyi_splash.close()
-    except Exception:
-        pass
 
     def on_window_close():
         if app.is_running:

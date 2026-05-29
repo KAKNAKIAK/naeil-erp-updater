@@ -31,20 +31,9 @@ updater_a = Analysis(
 )
 updater_pyz = PYZ(updater_a.pure)
 
-splash = Splash(
-    'splash.png',
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=None,
-    text_size=12,
-    minify_script=True,
-    always_on_top=True,
-)
-
 exe = EXE(
     pyz,
     a.scripts,
-    splash,
     [],
     exclude_binaries=True,
     name='NaeilERPUpdater',
@@ -81,7 +70,6 @@ updater_exe = EXE(
 coll = COLLECT(
     exe,
     updater_exe,
-    splash.binaries,
     a.binaries,
     a.datas,
     updater_a.binaries,
