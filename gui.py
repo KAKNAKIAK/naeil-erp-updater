@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.17"
+APP_VERSION = "v1.1.18"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 def get_app_dir():
@@ -497,6 +497,16 @@ class RpaGuiApp:
                 pass
             self._loading_overlay = None
 
+    FARE_SITE_URL = 'https://fare-calculator-2026.web.app/'
+
+    def open_fare_site(self):
+        """요금조회 웹사이트를 기본 브라우저로 연다."""
+        try:
+            import webbrowser
+            webbrowser.open(self.FARE_SITE_URL)
+        except Exception as e:
+            messagebox.showerror('사이트 열기 실패', f'요금조회 사이트를 열지 못했습니다.\n{e}')
+
     def build_ui(self):
         # 1. 헤더 영역
         header_frame = tk.Frame(self.root, bg=self.bg_color, pady=14)
@@ -523,7 +533,17 @@ class RpaGuiApp:
 
         desc_label = tk.Label(title_frame, text='엑셀 데이터를 기반으로 ERP 항공요금을 자동으로 반영합니다.', font=('맑은 고딕', 9), bg=self.bg_color, fg=self.fg_muted)
         desc_label.pack(anchor=tk.W, pady=(4, 0))
-        
+
+        # 버전 밑 작은 링크 버튼: 요금조회 사이트로 이동
+        fare_site_btn = tk.Button(
+            title_frame, text='요금조회 사이트가기 ↗', font=('맑은 고딕', 8, 'bold'),
+            bg=self.card_color, fg=self.accent_color,
+            activebackground=self.card_color, activeforeground=self.accent_hover,
+            bd=0, relief=tk.FLAT, cursor='hand2', padx=8, pady=2,
+            command=self.open_fare_site)
+        fare_site_btn.pack(anchor=tk.W, pady=(6, 0))
+        self._add_hover(fare_site_btn, self.card_color, self.accent_color)
+
         # 2. 파일 및 필터 카드
         settings_frame = tk.LabelFrame(self.root, text=' 작업 설정 ', font=('맑은 고딕', 9, 'bold'), bg=self.card_color, fg=self.fg_muted, bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightthickness=1, padx=10, pady=8)
         settings_frame.pack(fill=tk.X, padx=24, pady=(6, 12))

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "v1.1.17"
+$Version = "v1.1.18"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $ReleaseDir = Join-Path $ReleaseRoot "NaeilERPUpdater"
@@ -118,11 +118,18 @@ try {
     if (Test-Path -LiteralPath $LatestTemplate) {
         $LatestOut = Join-Path $ReleaseRoot "latest.json"
         $SetupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupOut).Hash
+        $DownloadUrl = "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/$Version/NaeilERPUpdater_Setup_$Version.exe"
         $Latest = Get-Content -LiteralPath $LatestTemplate -Raw -Encoding UTF8 | ConvertFrom-Json
         $Latest.version = $Version
+        $Latest.download_url = $DownloadUrl
         $Latest.sha256 = $SetupHash
-        $Latest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $LatestOut -Encoding UTF8
-        Write-Host "Latest manifest: $LatestOut"
+        $Json = $Latest | ConvertTo-Json -Depth 10
+        # 루트(푸시 대상)와 release 사본을 모두 동기화 -> 해시 불일치 영구 방지
+        Set-Content -LiteralPath $LatestOut -Value $Json -Encoding UTF8
+        Set-Content -LiteralPath $LatestTemplate -Value $Json -Encoding UTF8
+        Write-Host "Latest manifest (release): $LatestOut"
+        Write-Host "Latest manifest (root):    $LatestTemplate"
+        Write-Host "Download URL: $DownloadUrl"
         Write-Host "Setup SHA256: $SetupHash"
     }
 
