@@ -25,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import excel_loader
 import update_client
 
-APP_VERSION = "v1.1.13"
+APP_VERSION = "v1.1.14"
 UPDATER_EXE_NAME = "NaeilERPUpdaterUpdater.exe"
 
 def get_app_dir():

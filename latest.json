@@ -1,8 +1,8 @@
 {
-  "version": "v1.1.13",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.13/NaeilERPUpdater_Setup_v1.1.13.exe",
+  "version": "v1.1.14",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.14/NaeilERPUpdater_Setup_v1.1.14.exe",
   "sha256": "3E99F5CEB9603F5AB192E9EF639C6F6B02BD5DC7C35E0CE836CCA24D1CF66D9B",
   "notes": [
-    "실행 시 GUI 창 배후의 CMD 콘솔창이 뜨지 않도록 숨김 옵션 적용 및 기간 입력란 UI 안정화"
+    "아동 요금(C열)이 누락되었거나 오류값(텍스트)인 경우 0원으로 대체 처리하여 정상 동작하도록 예외 처리 수정"
   ]
 }

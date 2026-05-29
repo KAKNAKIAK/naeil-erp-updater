@@ -78,17 +78,34 @@ def load_and_validate_fares(file_path, history_log_path=None):
                     print(f"[이어서 진행] {idx+2}행: 날짜 {date_str}는 이미 이전 실행에서 성공하여 스킵합니다.")
                     continue
 
-                # 요금 유효성 검사
-                if pd.isna(raw_adult) or pd.isna(raw_child):
-                    print(f"[경고] {idx+2}행: 요금이 누락되었습니다. (건너뜀)")
+                # 요금 유효성 검사 (성인 요금 B열은 필수값)
+                if pd.isna(raw_adult):
+                    print(f"[경고] {idx+2}행: 성인 요금이 누락되었습니다. (건너뜀)")
                     continue
 
-                adult_fare = int(float(str(raw_adult).replace(',', '').strip()))
-                child_fare = int(float(str(raw_child).replace(',', '').strip()))
-
-                if adult_fare < 0 or child_fare < 0:
-                    print(f"[경고] {idx+2}행: 요금은 음수일 수 없습니다. (건너뜀)")
+                try:
+                    adult_fare = int(float(str(raw_adult).replace(',', '').strip()))
+                except (ValueError, TypeError):
+                    print(f"[경고] {idx+2}행: 성인 요금 파싱 오류 ({raw_adult}). (건너뜀)")
                     continue
+
+                if adult_fare < 0:
+                    print(f"[경고] {idx+2}행: 성인 요금은 음수일 수 없습니다. (건너뜀)")
+                    continue
+
+                # 아동 요금 C열(알선수익)은 누락되거나 오류값이면 0원으로 대체
+                child_fare = 0
+                if not pd.isna(raw_child):
+                    try:
+                        child_fare = int(float(str(raw_child).replace(',', '').strip()))
+                        if child_fare < 0:
+                            print(f"[정보] {idx+2}행: 아동 요금이 음수({child_fare})이므로 0원으로 대체합니다.")
+                            child_fare = 0
+                    except (ValueError, TypeError):
+                        print(f"[정보] {idx+2}행: 아동 요금 오류값({raw_child})이 입력되어 0원으로 대체합니다.")
+                        child_fare = 0
+                else:
+                    print(f"[정보] {idx+2}행: 아동 요금이 비어 있어 0원으로 대체합니다.")
 
                 valid_rows.append({
                     "row_index": idx + 2,
