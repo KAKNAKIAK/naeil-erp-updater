@@ -1,7 +1,7 @@
 {
   "version": "v1.1.10",
   "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.10/NaeilERPUpdater_Setup_v1.1.10.exe",
-  "sha256": "PENDING_REPLACE",
+  "sha256": "CF8DE91B4B84FE57B53CDFA86891CA20EFB82504C56F6062727B27E29BBAB1FD",
   "notes": [
     "스플래시 미사용 환경에서 import pyi_splash 예외(KeyError)로 실행 안 되던 오류 수정"
   ]
