@@ -41,7 +41,7 @@ import pandas as pd
 import excel_loader
 import update_client
 
-APP_VERSION = "v2.0.3"
+APP_VERSION = "v2.0.4"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
