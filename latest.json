@@ -1,7 +1,7 @@
 ﻿{
     "version":  "v2.0.1",
     "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v2.0.1/NaeilERPUpdater_Setup_v2.0.1.exe",
-    "sha256":  "70E2E088EED29F8D41A663E278AF46C83B91DD31DD24535D428A761322E5A1B7",
+    "sha256":  "70e2e088eed29f8d41a663e278af46c83b91dd31dd24535d428a761322e5a1b7",
     "notes":  [
                   "v1 설정 파일 유지 업그레이드 시 v2 요금 입력 셀렉터가 누락되어 adult_air_input 오류가 나던 문제 수정",
                   "설치기와 앱 실행 시점 모두에서 기존 config.json을 v2 셀렉터로 자동 보정"
