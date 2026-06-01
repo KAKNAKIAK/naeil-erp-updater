@@ -1,10 +1,9 @@
 ﻿{
-    "version":  "v2.0.3",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v2.0.3/NaeilERPUpdater_Setup_v2.0.3.exe",
-    "sha256":  "D332396810C288C6AE4E2F6FFF864AB93E7E63711339CD335B48BB79C4B95CBE",
+    "version":  "v2.0.4",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v2.0.4/NaeilERPUpdater_Setup_v2.0.4.exe",
+    "sha256":  "090265F75CA843F2F81654796A782B39EE490B534C3B9F8E01EFC11D8687E2D6",
     "notes":  [
-                  "요금 입력 자릿수 뒤섞임 버그 수정: 금액칸 자동 콤마와 충돌하던 한 글자 입력 방식을 값 일괄 주입 방식으로 교체",
-                  "저장 전 입력값 검증 추가: 입력칸 값을 다시 읽어 의도값과 다르면 그 날짜는 저장하지 않고 실패로 기록",
-                  "자동 업데이트 매니페스트 캐시 갱신"
+                  "가이드 매뉴얼 웹페이지 연동: 상단 헤더 영역에 \u0027가이드 매뉴얼 보기\u0027 바로가기 버튼 탑재",
+                  "자체 캡처한 실제 프로그램 화면을 수록한 웹 가이드 문서(HTML) 배포 및 연동"
               ]
 }
