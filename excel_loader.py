@@ -58,9 +58,26 @@ def load_and_validate_fares(file_path, history_log_path=None):
         valid_rows = []
         for idx, row in df.iterrows():
             try:
-                raw_date = row.iloc[0]
-                raw_adult = row.iloc[1]
-                raw_child = row.iloc[2]
+                # 8개 열이 존재하지 않을 경우를 대비해 예외 처리 또는 패딩
+                row_len = len(row)
+                raw_date = row.iloc[0] if row_len > 0 else None
+                raw_adult_air = row.iloc[1] if row_len > 1 else 0
+                
+                # 호환성 지원: 엑셀 열이 3개뿐인 경우(기존 v1 3열 양식: 날짜, 항공비, 알선수익)
+                if row_len == 3:
+                    raw_adult_hotel = 0
+                    raw_adult_land = 0
+                    raw_adult_tour = 0
+                    raw_adult_profit = row.iloc[2]
+                    raw_child_fare = 0
+                    raw_infant_fare = 0
+                else:
+                    raw_adult_hotel = row.iloc[2] if row_len > 2 else 0
+                    raw_adult_land = row.iloc[3] if row_len > 3 else 0
+                    raw_adult_tour = row.iloc[4] if row_len > 4 else 0
+                    raw_adult_profit = row.iloc[5] if row_len > 5 else 0
+                    raw_child_fare = row.iloc[6] if row_len > 6 else 0
+                    raw_infant_fare = row.iloc[7] if row_len > 7 else 0
 
                 # 날짜 유효성 검사
                 if pd.isna(raw_date):
@@ -78,40 +95,38 @@ def load_and_validate_fares(file_path, history_log_path=None):
                     print(f"[이어서 진행] {idx+2}행: 날짜 {date_str}는 이미 이전 실행에서 성공하여 스킵합니다.")
                     continue
 
-                # 요금 유효성 검사 (성인 요금 B열은 필수값)
-                if pd.isna(raw_adult):
-                    print(f"[경고] {idx+2}행: 성인 요금이 누락되었습니다. (건너뜀)")
-                    continue
-
-                try:
-                    adult_fare = int(float(str(raw_adult).replace(',', '').strip()))
-                except (ValueError, TypeError):
-                    print(f"[경고] {idx+2}행: 성인 요금 파싱 오류 ({raw_adult}). (건너뜀)")
-                    continue
-
-                if adult_fare < 0:
-                    print(f"[경고] {idx+2}행: 성인 요금은 음수일 수 없습니다. (건너뜀)")
-                    continue
-
-                # 아동 요금 C열(알선수익)은 누락되거나 오류값이면 0원으로 대체
-                child_fare = 0
-                if not pd.isna(raw_child):
+                # 각 요금 필드 안전하게 파싱 (기본값 0)
+                def parse_fare(val, label):
+                    if pd.isna(val):
+                        return 0
                     try:
-                        child_fare = int(float(str(raw_child).replace(',', '').strip()))
-                        if child_fare < 0:
-                            print(f"[정보] {idx+2}행: 아동 요금이 음수({child_fare})이므로 0원으로 대체합니다.")
-                            child_fare = 0
+                        f_val = int(float(str(val).replace(',', '').strip()))
+                        if f_val < 0:
+                            print(f"[정보] {idx+2}행: {label} 요금이 음수({f_val})이므로 0원으로 대체합니다.")
+                            return 0
+                        return f_val
                     except (ValueError, TypeError):
-                        print(f"[정보] {idx+2}행: 아동 요금 오류값({raw_child})이 입력되어 0원으로 대체합니다.")
-                        child_fare = 0
-                else:
-                    print(f"[정보] {idx+2}행: 아동 요금이 비어 있어 0원으로 대체합니다.")
+                        print(f"[정보] {idx+2}행: {label} 요금 오류값({val})이 입력되어 0원으로 대체합니다.")
+                        return 0
+
+                adult_air = parse_fare(raw_adult_air, "성인 항공비")
+                adult_hotel = parse_fare(raw_adult_hotel, "성인 호텔비")
+                adult_land = parse_fare(raw_adult_land, "성인 지상비")
+                adult_tour = parse_fare(raw_adult_tour, "성인 여행경비")
+                adult_profit = parse_fare(raw_adult_profit, "성인 알선수익")
+                child_fare = parse_fare(raw_child_fare, "소아 요금")
+                infant_fare = parse_fare(raw_infant_fare, "유아 요금")
 
                 valid_rows.append({
                     "row_index": idx + 2,
                     "date": date_str,
-                    "adult_fare": adult_fare,
-                    "child_fare": child_fare
+                    "adult_air": adult_air,
+                    "adult_hotel": adult_hotel,
+                    "adult_land": adult_land,
+                    "adult_tour": adult_tour,
+                    "adult_profit": adult_profit,
+                    "child_fare": child_fare,
+                    "infant_fare": infant_fare
                 })
             except Exception as e:
                 print(f"[경고] {idx+2}행 파싱 오류: {str(e)} (건너뜀)")

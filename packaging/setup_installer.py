@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -27,11 +28,32 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v1.1.19"
+APP_VERSION = "v2.0.2"
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
 # Windows '앱 및 기능' 등록 키 (현재 사용자 범위)
 UNINSTALL_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\NaeilERPUpdater"
+
+DEFAULT_SELECTORS = {
+    "login_id": "input[name='userId']",
+    "login_pw": "input[name='userPw']",
+    "login_btn": "#btnLogin",
+    "search_date_input": "#searchStDate",
+    "search_date_end_input": "#searchEnDate",
+    "search_button": "#gridMain_r",
+    "header_all_checkbox": "td.aui-grid-row-check-header input",
+    "update_button": "#priceUpdate",
+    "adult_air_input": "#addAir01",
+    "adult_hotel_input": "#addHotel11",
+    "adult_land_input": "#addLand21",
+    "adult_tour_input": "#addExpense40",
+    "adult_profit_input": "#addProfit41",
+    "child_fare_input": "#addChild90",
+    "infant_fare_input": "#addInfant91",
+    "save_button": "#priceSave",
+    "cancel_button": "#popCloseBtn",
+    "date_cell_in_row": ".aui-grid-default-column",
+}
 
 
 def resource_path(name):
@@ -44,6 +66,37 @@ def default_install_dir():
     if local_app_data:
         return Path(local_app_data) / "NaeilTour" / "ERPUpdater"
     return Path.home() / "AppData" / "Local" / "NaeilTour" / "ERPUpdater"
+
+
+def merge_v2_selectors(config_path):
+    if not config_path.exists():
+        return
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(config, dict):
+            return
+        selectors = config.get("selectors")
+        if not isinstance(selectors, dict):
+            selectors = {}
+
+        merged = dict(DEFAULT_SELECTORS)
+        for key, value in selectors.items():
+            if key == "adult_fare_input":
+                if "adult_air_input" not in selectors:
+                    merged["adult_air_input"] = value
+                continue
+            if key == "child_fare_input" and value == "#addProfit41" and "adult_profit_input" not in selectors:
+                merged["adult_profit_input"] = value
+                continue
+            merged[key] = value
+
+        config["selectors"] = merged
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def ps_quote(value):
@@ -130,6 +183,8 @@ def install_payload(install_dir, create_shortcut=True):
 
         if config_backup and config_backup.exists():
             shutil.copy2(config_backup, config_path)
+
+    merge_v2_selectors(config_path)
 
     (install_dir / "logs" / "screenshots").mkdir(parents=True, exist_ok=True)
     (install_dir / "ChromeProfile").mkdir(parents=True, exist_ok=True)
