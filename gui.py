@@ -215,6 +215,7 @@ class GUIConsoleRedirector:
 
 class RpaGuiApp:
     FARE_SITE_URL = 'https://fare-calculator-2026.web.app/'
+    GUIDE_SITE_URL = 'https://kaknakiak.github.io/naeil-erp-updater/사용가이드.html'
 
     def __init__(self, root):
         self.root = root
@@ -644,6 +645,13 @@ class RpaGuiApp:
         except Exception as e:
             messagebox.showerror('사이트 열기 실패', f'요금조회 사이트를 열지 못했습니다.\n{e}')
 
+    def open_guide_site(self):
+        try:
+            import webbrowser
+            webbrowser.open(self.GUIDE_SITE_URL)
+        except Exception as e:
+            messagebox.showerror('사이트 열기 실패', f'가이드 매뉴얼을 열지 못했습니다.\n{e}')
+
 
     # ------------------------------------------------------------------
     # UI 빌드
@@ -691,6 +699,15 @@ class RpaGuiApp:
             command=self.open_fare_site)
         fare_site_btn.pack(side=tk.LEFT, padx=(10, 0), pady=(4, 0))
         self._add_hover(fare_site_btn, self.card_color, self.accent_color, normal_fg=self.accent_color, hover_fg='white')
+
+        guide_btn = tk.Button(
+            title_row, text='가이드 매뉴얼 보기 ↗', font=('맑은 고딕', 8, 'bold'),
+            bg=self.card_color, fg=self.accent_orange,
+            activebackground=self.accent_orange, activeforeground='white',
+            bd=0, relief=tk.FLAT, cursor='hand2', padx=8, pady=2,
+            command=self.open_guide_site)
+        guide_btn.pack(side=tk.LEFT, padx=(10, 0), pady=(4, 0))
+        self._add_hover(guide_btn, self.card_color, self.accent_orange, normal_fg=self.accent_orange, hover_fg='white')
 
 
 

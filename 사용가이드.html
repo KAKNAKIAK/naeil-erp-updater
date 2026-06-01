@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Naeil ERP Fare Updater 사용 매뉴얼</title>
+  <meta name="description" content="내일투어 ERP 항공요금 자동 업데이트 프로그램(v2.0.3)의 상세 사용 매뉴얼 및 가이드">
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-main: #0b0f19;
+      --bg-card: #161c2e;
+      --bg-input: #1f294d;
+      --border-color: #2c3a5f;
+      
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      
+      --accent-blue: #3b82f6;
+      --accent-blue-hover: #2563eb;
+      --accent-orange: #f97316;
+      --accent-orange-hover: #ea580c;
+      --accent-green: #22c55e;
+      --accent-green-hover: #16a34a;
+      --accent-red: #ef4444;
+      
+      --font-title: 'Outfit', 'Noto Sans KR', sans-serif;
+      --font-body: 'Inter', 'Noto Sans KR', sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar Styling */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--bg-main);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-color);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--accent-blue);
+    }
+
+    /* Container */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      background: linear-gradient(135deg, #111827 0%, #0b0f19 100%);
+      border-bottom: 1px solid var(--border-color);
+      padding: 20px 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background-opacity: 0.8;
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text-main);
+    }
+
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--accent-orange) 0%, var(--accent-blue) 100%);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-title);
+      font-weight: 800;
+      color: white;
+      font-size: 1.2rem;
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+    }
+
+    .brand-name {
+      font-family: var(--font-title);
+      font-weight: 700;
+      font-size: 1.3rem;
+      letter-spacing: -0.5px;
+    }
+
+    .brand-name span {
+      color: var(--accent-orange);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 20px;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: color 0.3s ease;
+    }
+
+    .nav-link:hover {
+      color: var(--accent-blue);
+    }
+
+    /* Hero Section */
+    .hero {
+      position: relative;
+      padding: 100px 0 60px 0;
+      text-align: center;
+      background: radial-gradient(circle at top, rgba(59, 130, 246, 0.15) 0%, transparent 60%);
+    }
+
+    .hero-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      background-color: rgba(249, 115, 22, 0.15);
+      border: 1px solid rgba(249, 115, 22, 0.3);
+      color: var(--accent-orange);
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 24px;
+      font-family: var(--font-title);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4); }
+      70% { transform: scale(1.03); box-shadow: 0 0 0 10px rgba(249, 115, 22, 0); }
+      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+    }
+
+    .hero h1 {
+      font-family: var(--font-title);
+      font-size: 3.5rem;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -1px;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 700px;
+      margin: 0 auto;
+      font-weight: 300;
+    }
+
+    /* Main Section Layout */
+    .layout-wrapper {
+      display: grid;
+      grid-template-columns: 280px 15px 1fr;
+      margin-top: 40px;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      position: sticky;
+      top: 100px;
+      height: calc(100vh - 140px);
+      overflow-y: auto;
+      padding-right: 15px;
+    }
+
+    .sidebar-title {
+      font-family: var(--font-title);
+      font-size: 0.9rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent-orange);
+      margin-bottom: 16px;
+    }
+
+    .sidebar-menu {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sidebar-item a {
+      display: block;
+      padding: 10px 16px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+      border-left: 2px solid transparent;
+    }
+
+    .sidebar-item a:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      padding-left: 20px;
+    }
+
+    .sidebar-item.active a {
+      background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, transparent 100%);
+      color: var(--accent-blue);
+      border-left: 2px solid var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .sidebar-divider {
+      grid-column: 2;
+      width: 1px;
+      background-color: var(--border-color);
+      height: 100%;
+    }
+
+    /* Content Area */
+    .content-area {
+      padding-left: 40px;
+      grid-column: 3;
+    }
+
+    /* Guide Section Card */
+    .guide-section {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 40px;
+      margin-bottom: 40px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      transition: border-color 0.3s ease;
+    }
+
+    .guide-section:hover {
+      border-color: rgba(59, 130, 246, 0.4);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 16px;
+    }
+
+    .section-icon {
+      font-size: 1.8rem;
+    }
+
+    .section-header h2 {
+      font-family: var(--font-title);
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .section-intro {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    /* Warning & Tips Boxes */
+    .alert-box {
+      border-radius: 12px;
+      padding: 20px;
+      margin: 24px 0;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .alert-box.important {
+      background-color: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .alert-box.important .alert-icon {
+      color: var(--accent-red);
+      font-size: 1.4rem;
+    }
+
+    .alert-box.tip {
+      background-color: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .alert-box.tip .alert-icon {
+      color: var(--accent-blue);
+      font-size: 1.4rem;
+    }
+
+    .alert-title {
+      font-weight: 700;
+      font-size: 1rem;
+      margin-bottom: 4px;
+    }
+
+    .alert-box.important .alert-title {
+      color: #fca5a5;
+    }
+
+    .alert-box.tip .alert-title {
+      color: #93c5fd;
+    }
+
+    .alert-content {
+      font-size: 0.95rem;
+      color: var(--text-main);
+    }
+
+    /* Lists and Steps */
+    .step-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin: 24px 0;
+    }
+
+    .step-item {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .step-number {
+      width: 28px;
+      height: 28px;
+      background-color: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-title);
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--accent-orange);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .step-text {
+      font-size: 1rem;
+      color: var(--text-main);
+    }
+
+    .step-text strong {
+      color: white;
+      font-weight: 600;
+    }
+
+    /* Grid layout for features */
+    .features-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 24px 0;
+    }
+
+    .feature-card {
+      background-color: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      transition: all 0.3s ease;
+    }
+
+    .feature-card:hover {
+      background-color: rgba(255, 255, 255, 0.04);
+      transform: translateY(-2px);
+    }
+
+    .feature-title {
+      font-family: var(--font-title);
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent-blue);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .feature-desc {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+    }
+
+    /* Images */
+    .image-container {
+      background-color: #0d111d;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 12px;
+      margin: 28px 0;
+      text-align: center;
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+    }
+
+    .image-container img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      display: block;
+      margin: 0 auto;
+      transition: transform 0.3s ease;
+    }
+
+    .image-caption {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 10px;
+      display: block;
+      font-weight: 500;
+    }
+
+    /* Table styling */
+    .table-container {
+      overflow-x: auto;
+      margin: 24px 0;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      background-color: rgba(59, 130, 246, 0.08);
+      font-weight: 600;
+      color: var(--accent-blue);
+      font-family: var(--font-title);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    /* FAQ Accordion */
+    .faq-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin: 24px 0;
+    }
+
+    .faq-item {
+      border: 1px solid var(--border-color);
+      background-color: rgba(255, 255, 255, 0.02);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.3s ease;
+    }
+
+    .faq-item:hover {
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .faq-trigger {
+      width: 100%;
+      padding: 20px 24px;
+      background: none;
+      border: none;
+      color: var(--text-main);
+      text-align: left;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background-color 0.3s ease;
+    }
+
+    .faq-trigger:hover {
+      background-color: rgba(255, 255, 255, 0.03);
+    }
+
+    .faq-trigger::after {
+      content: '+';
+      font-size: 1.4rem;
+      color: var(--accent-orange);
+      transition: transform 0.3s ease;
+    }
+
+    .faq-item.open .faq-trigger::after {
+      content: '−';
+      transform: rotate(180deg);
+    }
+
+    .faq-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease-out, padding 0.3s ease;
+      background-color: rgba(0, 0, 0, 0.15);
+      padding: 0 24px;
+    }
+
+    .faq-item.open .faq-content {
+      max-height: 500px;
+      padding: 20px 24px;
+      border-top: 1px solid var(--border-color);
+    }
+
+
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .layout-wrapper {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        display: none;
+      }
+      .sidebar-divider {
+        display: none;
+      }
+      .content-area {
+        padding-left: 0;
+      }
+      .hero h1 {
+        font-size: 2.5rem;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+      .guide-section {
+        padding: 24px;
+      }
+      .section-header h2 {
+        font-size: 1.5rem;
+      }
+      .header-content {
+        flex-direction: column;
+        gap: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="container header-content">
+      <a href="#" class="brand">
+        <div class="brand-logo">N</div>
+        <div class="brand-name">Naeil ERP <span>Fare Updater</span></div>
+      </a>
+      <nav class="nav-links">
+        <a href="#intro" class="nav-link">개요</a>
+        <a href="#prep" class="nav-link">사전준비</a>
+        <a href="#excel" class="nav-link">요금편집</a>
+        <a href="#rpa" class="nav-link">RPA구동</a>
+        <a href="#faq" class="nav-link">FAQ</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">RPA System (v2.0.3)</div>
+      <h1>ERP 항공요금 일괄 업데이트 매뉴얼</h1>
+      <p>엑셀 파일 연동 및 간편 셀 편집으로 내일투어 ERP 시스템에 요금을 안전하게 자동 반영하세요.</p>
+    </div>
+  </section>
+
+  <!-- Content Layout -->
+  <div class="container layout-wrapper">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-title">목차</div>
+      <ul class="sidebar-menu">
+        <li class="sidebar-item active" id="menu-intro"><a href="#intro">1. 프로그램 개요</a></li>
+        <li class="sidebar-item" id="menu-prep"><a href="#prep">2. 디버깅 크롬 기동 & 로그인</a></li>
+        <li class="sidebar-item" id="menu-excel"><a href="#excel">3. 요금 준비 & 스프레드 편집</a></li>
+        <li class="sidebar-item" id="menu-rpa"><a href="#rpa">4. RPA 실행 & 필터링</a></li>
+        <li class="sidebar-item" id="menu-safety"><a href="#safety">5. 이중 안전장치 기능</a></li>
+        <li class="sidebar-item" id="menu-faq"><a href="#faq">6. FAQ / 트러블슈팅</a></li>
+      </ul>
+    </aside>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- Main Content Area -->
+    <main class="content-area">
+
+      <!-- Section: Intro -->
+      <section id="intro" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">ℹ️</span>
+          <h2>프로그램 개요</h2>
+        </div>
+        <p class="section-intro">
+          <strong>Naeil ERP Fare Updater</strong>는 내일투어 ERP 시스템(<a href="http://erp.naeiltour.co.kr" target="_blank" style="color: var(--accent-blue); text-decoration: none;">erp.naeiltour.co.kr</a>)에서 항공요금을 엑셀 연동 및 셀 직접 편집 방식을 통해 대량으로 자동 입력·저장하는 RPA 업무 자동화 프로그램입니다.
+        </p>
+        <p>
+          기존 수작업으로 조회하고 클릭하며 반복했던 요금 등록 단계를 간소화하고, 자릿수 튀는 문제나 이전 날짜 잔상 로딩 버그 등을 RPA 안전 로직을 통해 완벽하게 제어합니다.
+        </p>
+        
+        <div class="image-container">
+          <img src="assets/gui_collapsed.png" alt="Naeil ERP Fare Updater 기본 모드 화면">
+          <span class="image-caption">그림 1. 프로그램 기본 실행 화면 (기본 모드)</span>
+        </div>
+      </section>
+
+      <!-- Section: Prep -->
+      <section id="prep" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">🌐</span>
+          <h2>디버깅 크롬 기동 & 로그인</h2>
+        </div>
+        <p class="section-intro">
+          RPA가 브라우저에 임의로 직접 계정을 기입해 접근하는 대신, 보안 세션 유지를 위해 사용자가 직접 로그인한 디버깅 브라우저 창의 제어권을 가져오는 방식으로 작동합니다.
+        </p>
+
+        <div class="alert-box important">
+          <span class="alert-icon">⚠️</span>
+          <div>
+            <div class="alert-title">중요: 일반 크롬 브라우저 사전 종료</div>
+            <div class="alert-content">
+              프로그램을 켜기 전에 <strong>반드시 PC에 열려 있는 모든 일반 크롬 브라우저 창을 닫아주셔야 합니다.</strong> 그렇지 않으면 디버깅 포트(9222) 점유 오류가 발생하여 프로그램이 브라우저에 접속하지 못합니다.
+            </div>
+          </div>
+        </div>
+
+        <ul class="step-list">
+          <li class="step-item">
+            <div class="step-number">1</div>
+            <div class="step-text">프로그램 우상단 메인 헤더에 위치한 <strong>`ERP 켜기`</strong> 버튼을 클릭합니다.</div>
+          </li>
+          <li class="step-item">
+            <div class="step-number">2</div>
+            <div class="step-text">자동으로 포트 9222 디버깅 모드로 세팅된 새 크롬 창이 뜨면서 내일투어 ERP 로그인 화면이 로드됩니다.</div>
+          </li>
+          <li class="step-item">
+            <div class="step-number">3</div>
+            <div class="step-text">새로 뜬 크롬 창에서 사원 아이디로 <strong>직접 로그인을 완료</strong>한 뒤, 요금을 관리 및 대입하고자 하는 <strong>ERP 해당 메뉴 요금 화면</strong>까지 이동합니다.</div>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Section: Excel -->
+      <section id="excel" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">📁</span>
+          <h2>요금 준비 & 스프레드 편집</h2>
+        </div>
+        <p class="section-intro">
+          업데이트하려는 날짜와 항목별 요금 정보는 엑셀 파일을 가져오거나, 프로그램 내에 내장된 스프레드시트(셀) 그리드 편집기를 이용해 직접 작성할 수 있습니다.
+        </p>
+
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-title">📥 엑셀 불러오기 방식</div>
+            <div class="feature-desc">
+              상단 <code>엑셀 양식 다운받기 ↗</code> 버튼을 클릭해 8컬럼 템플릿(날짜, 항공비, 호텔비, 지상비, 여행경비, 알선수익, 소아요금, 유아요금)을 다운받아 기입한 후, <code>엑셀 불러오기</code> 버튼으로 데이터만 셀에 얹어 진행합니다.
+            </div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-title">🔄 구버전 3열 포맷 호환</div>
+            <div class="feature-desc">
+              기존 v1 버전용 <strong>3개 열(날짜, 항공비, 알선수익)</strong> 형태의 엑셀도 그대로 가져올 수 있습니다. 이 경우 사용되지 않는 나머지 요금 셀(호텔비, 지상비 등)은 자동으로 <code>0</code>으로 채워져 충돌 없이 동작합니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="image-container">
+          <img src="assets/gui_expanded.png" alt="요금 직접 편집 패널 활성화 화면">
+          <span class="image-caption">그림 2. 요금 직접 입력하기 활성화 화면 (셀 편집 모드)</span>
+        </div>
+
+        <div class="alert-box tip">
+          <span class="alert-icon">💡</span>
+          <div>
+            <div class="alert-title">꿀팁: 스프레드시트 편집 팁</div>
+            <div class="alert-content">
+              <strong>1. 수식 자동 입력 (Fill-down)</strong>: 셀에 수식을 기입하고(예: <code>=A2+10000</code>) 해당 셀 우하단을 더블클릭하면 엑셀처럼 아래 행에 일괄 채워집니다.<br>
+              <strong>2. 실행취소(Ctrl+Z) / 다시실행(Ctrl+Y)</strong>: 작업을 잘못 기입했거나 수식을 채웠을 때 툴바나 단축키로 온전하게 복구할 수 있습니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>버튼명</th>
+                <th>설명</th>
+                <th>주요 기능 및 동작</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>전체 지우기</td>
+                <td>표 데이터 청소</td>
+                <td>스프레드시트 내에 기입된 날짜 및 요금 전체 데이터를 초기화합니다.</td>
+              </tr>
+              <tr>
+                <td>실행취소 / 다시실행</td>
+                <td>작업 히스토리 복구</td>
+                <td>수식 입력 또는 데이터 셀 기입 오류 시 전후 단계로 온전히 롤백합니다.</td>
+              </tr>
+              <tr>
+                <td>엑셀로 다운받기</td>
+                <td>자체 내역 내보내기</td>
+                <td>현재 그리드에 연산 완료되어 표시되고 있는 요금 전건을 엑셀 파일(.xlsx)로 내보냅니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Section: RPA -->
+      <section id="rpa" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">🚀</span>
+          <h2>RPA 실행 & 필터링</h2>
+        </div>
+        <p class="section-intro">
+          요금 준비와 ERP 로그인까지 확인되었다면 필터를 이용해 작업 대상 날짜를 타겟한 후 RPA 구동을 진행합니다.
+        </p>
+
+        <ul class="step-list">
+          <li class="step-item">
+            <div class="step-number">1</div>
+            <div class="step-text">
+              <strong>날짜 필터 모드 선택</strong>:<br>
+              - <strong>전체 대상</strong>: 그리드에 기입된 데이터 전량을 순차적으로 업데이트합니다.<br>
+              - <strong>특정일 이후</strong>: 시작 날짜를 지정하여 해당 일자 포함 이후의 날짜만 골라 실행합니다.<br>
+              - <strong>특정 날짜 지정</strong>: 대입하기 원하는 개별 날짜들을 콤마(<code>,</code>)로 구분하여 기입해 처리합니다.
+            </div>
+          </li>
+          <li class="step-item">
+            <div class="step-number">2</div>
+            <div class="step-text">
+              <strong>요금수정 시작 버튼 클릭</strong>:<br>
+              클릭 시 귀여운 카카오 여행 가방 로딩 GIF 애니메이션("ERP에 연결하고 있어요...")이 등장하며 브라우저 세션에 안전하게 진입을 준비합니다.
+            </div>
+          </li>
+          <li class="step-item">
+            <div class="step-number">3</div>
+            <div class="step-text">
+              <strong>실시간 작업 진행 및 중단 제어</strong>:<br>
+              - 진행 상황은 하단 <strong>실시간 작업 내용</strong>을 통해 처리 성공 및 경고 오류 메시지로 즉시 확인 가능합니다.<br>
+              - 진행 도중 필요할 경우 <strong>일시 중지 / 다시 시작</strong> 혹은 <strong>중지</strong> 버튼으로 세션을 안전하게 종료시킵니다.
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Section: Safety -->
+      <section id="safety" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">🔒</span>
+          <h2>이중 안전장치 기능</h2>
+        </div>
+        <p class="section-intro">
+          금액 단위가 크고 중요한 ERP 항공 요금 특성상, RPA 오작동으로 인한 잘못된 저장을 방지하기 위한 이중 검증 구조가 내장되어 있습니다.
+        </p>
+
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-title">✍️ 자릿수 어긋남 원천 방지 (JS Value Direct Injection)</div>
+            <div class="feature-desc">
+              ERP 금액 필드의 천 단위 실시간 콤마(,) 포맷 포커스 오류를 방지하기 위해, 한 글자씩 타이핑하는 방식 대신 금액 전체 수치를 자바스크립트 명령으로 다이렉트 주입합니다.
+            </div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-title">🔍 저장 직전 값 불일치 이중 검증</div>
+            <div class="feature-desc">
+              RPA가 요금을 다 입력한 뒤 <code>저장</code> 버튼을 누르기 바로 직전, 팝업 내의 실제 텍스트값을 역으로 읽어들여 엑셀의 목표가와 숫자 대 숫자 검증을 수행합니다. 다르면 저장을 차단하고 모달을 닫습니다.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: FAQ -->
+      <section id="faq" class="guide-section">
+        <div class="section-header">
+          <span class="section-icon">❓</span>
+          <h2>FAQ / 트러블슈팅</h2>
+        </div>
+        <p class="section-intro">
+          프로그램을 사용하면서 발생할 수 있는 주요 예외 메시지와 처리 방안입니다.
+        </p>
+
+        <div class="faq-container">
+          <div class="faq-item" id="faq-1">
+            <button class="faq-trigger" onclick="toggleFaq('faq-1')">
+              Q. "이미 프로그램이 실행 중입니다" 또는 포트 점유 에러가 발생합니다.
+            </button>
+            <div class="faq-content">
+              <p>
+                프로그램이 윈도우 뮤텍스로 중복 차단되어 있거나, 일반 크롬 창이 실행 중일 때 발생합니다. 작업 표시줄 우측 하단의 트레이 아이콘이나 작업 관리자(Ctrl + Shift + Esc)에서 기존에 켜두신 Chrome 관련 프로세스를 강제 종료하고, 프로그램 우측 헤더의 <code>ERP 켜기</code>를 이용해 다시 시작해 주세요.
+              </p>
+            </div>
+          </div>
+
+          <div class="faq-item" id="faq-2">
+            <button class="faq-trigger" onclick="toggleFaq('faq-2')">
+              Q. 엑셀 업로드 시 "성인 요금 오류값... 0원으로 대체합니다" 문구가 로그에 찍힙니다.
+            </button>
+            <div class="faq-content">
+              <p>
+                가져온 엑셀에 공백이 있거나, 숫자 대신 문자(예: "요금미정") 혹은 음수가 들어간 행이 존재하는 경우 발생합니다. 해당 행은 강제로 0원 처리되어 ERP 팝업에 입력 및 안전 통과가 유지됩니다. 엑셀 요금 열의 빈 칸 유무를 정돈해 주세요.
+              </p>
+            </div>
+          </div>
+
+          <div class="faq-item" id="faq-3">
+            <button class="faq-trigger" onclick="toggleFaq('faq-3')">
+              Q. 새 셋업 버전이 출시되었는데 자동 업데이트 확인 창이 뜨지 않습니다.
+            </button>
+            <div class="faq-content">
+              <p>
+                초기 v2.0.1 셋업 릴리즈 버전을 수동 설치하신 경우 내부에 자동 업데이트 모듈 런타임이 예외 누락되어 있을 수 있습니다. 이번 1회만 공식 배포용 최신 실행파일(예: <code>ERP 항공요금수정_배포용_v2.0.3.exe</code>)을 받아 덮어씌워 주시면 이후 버전부터 정상 반영됩니다.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+
+
+  <!-- Script for Sidebar Highlight & Accordion -->
+  <script>
+    // FAQ Toggle
+    function toggleFaq(id) {
+      const item = document.getElementById(id);
+      const isOpen = item.classList.contains('open');
+      
+      // Close all FAQs first
+      document.querySelectorAll('.faq-item').forEach(el => {
+        el.classList.remove('open');
+      });
+      
+      // Toggle current
+      if (!isOpen) {
+        item.classList.add('open');
+      }
+    }
+
+    // Sidebar highlight on scroll
+    window.addEventListener('DOMContentLoaded', () => {
+      const sections = document.querySelectorAll('section[id]');
+      const navItems = {
+        'intro': document.getElementById('menu-intro'),
+        'prep': document.getElementById('menu-prep'),
+        'excel': document.getElementById('menu-excel'),
+        'rpa': document.getElementById('menu-rpa'),
+        'safety': document.getElementById('menu-safety'),
+        'faq': document.getElementById('menu-faq')
+      };
+
+      function highlightNav() {
+        let scrollY = window.pageYOffset;
+        
+        sections.forEach(current => {
+          const sectionHeight = current.offsetHeight;
+          const sectionTop = current.offsetTop - 140;
+          const sectionId = current.getAttribute('id');
+          
+          if (scrollY > sectionTop && scrollY <= sectionTop + sectionHeight) {
+            Object.values(navItems).forEach(item => item.classList.remove('active'));
+            if (navItems[sectionId]) {
+              navItems[sectionId].classList.add('active');
+            }
+          }
+        });
+      }
+
+      window.addEventListener('scroll', highlightNav);
+    });
+  </script>
+</body>
+</html>
