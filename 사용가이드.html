@@ -637,8 +637,7 @@
         <li class="sidebar-item" id="menu-prep"><a href="#prep">2. 디버깅 크롬 기동 & 로그인</a></li>
         <li class="sidebar-item" id="menu-excel"><a href="#excel">3. 요금 준비 & 스프레드 편집</a></li>
         <li class="sidebar-item" id="menu-rpa"><a href="#rpa">4. RPA 실행 & 필터링</a></li>
-        <li class="sidebar-item" id="menu-safety"><a href="#safety">5. 이중 안전장치 기능</a></li>
-        <li class="sidebar-item" id="menu-faq"><a href="#faq">6. FAQ / 트러블슈팅</a></li>
+        <li class="sidebar-item" id="menu-faq"><a href="#faq">5. FAQ / 트러블슈팅</a></li>
       </ul>
     </aside>
 
@@ -811,32 +810,6 @@
         </ul>
       </section>
 
-      <!-- Section: Safety -->
-      <section id="safety" class="guide-section">
-        <div class="section-header">
-          <span class="section-icon">🔒</span>
-          <h2>이중 안전장치 기능</h2>
-        </div>
-        <p class="section-intro">
-          금액 단위가 크고 중요한 ERP 항공 요금 특성상, RPA 오작동으로 인한 잘못된 저장을 방지하기 위한 이중 검증 구조가 내장되어 있습니다.
-        </p>
-
-        <div class="features-grid">
-          <div class="feature-card">
-            <div class="feature-title">✍️ 자릿수 어긋남 원천 방지 (JS Value Direct Injection)</div>
-            <div class="feature-desc">
-              ERP 금액 필드의 천 단위 실시간 콤마(,) 포맷 포커스 오류를 방지하기 위해, 한 글자씩 타이핑하는 방식 대신 금액 전체 수치를 자바스크립트 명령으로 다이렉트 주입합니다.
-            </div>
-          </div>
-          <div class="feature-card">
-            <div class="feature-title">🔍 저장 직전 값 불일치 이중 검증</div>
-            <div class="feature-desc">
-              RPA가 요금을 다 입력한 뒤 <code>저장</code> 버튼을 누르기 바로 직전, 팝업 내의 실제 텍스트값을 역으로 읽어들여 엑셀의 목표가와 숫자 대 숫자 검증을 수행합니다. 다르면 저장을 차단하고 모달을 닫습니다.
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- Section: FAQ -->
       <section id="faq" class="guide-section">
         <div class="section-header">
@@ -914,7 +887,6 @@
         'prep': document.getElementById('menu-prep'),
         'excel': document.getElementById('menu-excel'),
         'rpa': document.getElementById('menu-rpa'),
-        'safety': document.getElementById('menu-safety'),
         'faq': document.getElementById('menu-faq')
       };
 
