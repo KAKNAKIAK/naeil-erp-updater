@@ -41,7 +41,7 @@ import pandas as pd
 import excel_loader
 import update_client
 
-APP_VERSION = "v2.0.2"
+APP_VERSION = "v2.0.3"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -2004,11 +2004,47 @@ class RpaGuiApp:
                         "child_fare_input": child_val,
                         "infant_fare_input": infant_val
                     }
+                    # 금액칸은 입력 시마다 천 단위 콤마를 자동으로 다시 찍는 JS 핸들러가 있어,
+                    # send_keys로 한 글자씩 치면 콤마 삽입 순간 커서가 튀어 자릿수가 뒤섞인다.
+                    # 값을 한 번에 주입하고 이벤트만 발생시켜 포매터가 완성된 숫자에 한 번만 동작하게 한다.
                     for key, val in inputs_mapping.items():
                         inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
-                        self.driver.execute_script("arguments[0].value = '';", inp)
-                        inp.send_keys(val)
+                        self.driver.execute_script(
+                            """
+                            const el = arguments[0], v = arguments[1];
+                            el.focus();
+                            el.value = v;
+                            el.dispatchEvent(new Event('input',  {bubbles:true}));
+                            el.dispatchEvent(new Event('keyup',  {bubbles:true}));
+                            el.dispatchEvent(new Event('change', {bubbles:true}));
+                            el.dispatchEvent(new Event('blur',   {bubbles:true}));
+                            """,
+                            inp, str(val)
+                        )
                     time.sleep(erp_short_pause)
+
+                    # 저장 전 검증: 입력칸을 다시 읽어 콤마/공백 제거 후 의도값과 대조.
+                    # 하나라도 어긋나면 자릿수 뒤섞임 등 입력 오류로 보고 저장하지 않고 실패 처리한다.
+                    def _digits_to_int(text):
+                        digits = "".join(ch for ch in str(text) if ch.isdigit())
+                        return int(digits) if digits else 0
+
+                    mismatches = []
+                    for key, val in inputs_mapping.items():
+                        inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
+                        actual_raw = self.driver.execute_script("return arguments[0].value;", inp)
+                        if _digits_to_int(actual_raw) != _digits_to_int(val):
+                            mismatches.append(f"{key}: 기대 {_digits_to_int(val)} / 실제 '{actual_raw}'")
+
+                    if mismatches:
+                        # 모달을 닫아 다음 날짜 처리에 영향이 없게 정리한 뒤 실패 처리
+                        try:
+                            cancel_btns = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
+                            if cancel_btns:
+                                self.driver.execute_script("arguments[0].click();", cancel_btns[0])
+                        except Exception:
+                            pass
+                        raise RuntimeError("입력값 검증 실패(저장 안 함) - " + "; ".join(mismatches))
 
                     save_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["save_button"])
                     self.driver.execute_script("arguments[0].click();", save_btn)
