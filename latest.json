@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "v1.1.19",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v1.1.19/NaeilERPUpdater_Setup_v1.1.19.exe",
-    "sha256":  "A06397F0BAFF8D379C9131398F696A65E03CF5FE8860F0DF5A11792ED3B9BD10",
+    "version":  "v2.0.0",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v2.0.0/NaeilERPUpdater_Setup_v2.0.0.exe",
+    "sha256":  "FE7B58BA425D0BF9E7C367BA3CBDEC694ECCC824A02386F2E043690BF5D2E7A7",
     "notes":  [
                   "작업 완료 후 뜨던 결과 요약 팝업 제거(요약은 작업 내용 로그에 그대로 표시)"
               ]
