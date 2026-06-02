@@ -15,6 +15,9 @@
   "erp_poll_interval": 0.25,
   "erp_short_pause": 0.2,
   "erp_grid_ready_stable_seconds": 1.0,
+  "grid_id": "#gridMain",
+  "grid_page_size": 500,
+  "paging_search_button": "#gridMain_r",
   "selectors": {
     "login_id": "input[name='userId']",
     "login_pw": "input[name='userPw']",
