@@ -20,18 +20,59 @@ def select_excel_file():
     root.destroy()
     return file_path
 
+def _normalize_dt(raw_dt):
+    if pd.isna(raw_dt):
+        return None
+    if isinstance(raw_dt, pd.Timestamp):
+        return raw_dt.strftime('%Y-%m-%d')
+    dt_str = str(raw_dt).strip().split(' ')[0]
+    dt_str = dt_str.replace('/', '-').replace('.', '-').strip('-')
+    if len(dt_str) == 8 and dt_str.isdigit():
+        return f"{dt_str[:4]}-{dt_str[4:6]}-{dt_str[6:]}"
+    parts = dt_str.split('-')
+    if len(parts) == 3:
+        try:
+            y, m, d = parts
+            if len(y) == 4:
+                return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _is_date_like(val):
+    """값이 '실제 날짜'로 보이는지 판정한다.
+    반환: True(날짜) / False(날짜 아님) / None(빈 값 — 판단 보류)
+    8자리 요금(예: 41000000)이 날짜로 오인되지 않도록 연/월/일 범위까지 확인한다."""
+    if pd.isna(val):
+        return None
+    if isinstance(val, pd.Timestamp):
+        return True
+    s = str(val).strip()
+    if not s:
+        return None
+    norm = _normalize_dt(val)
+    if not norm:
+        return False
+    try:
+        y, m, d = (int(x) for x in norm.split('-'))
+        return 2000 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31
+    except (ValueError, TypeError):
+        return False
+
 def load_and_validate_fares(file_path, history_log_path=None):
     """
     선택된 엑셀 파일을 읽고 요금 데이터를 파싱 및 유효성 검사합니다.
     history_log_path가 주어지면 이전 SUCCESS 이력 날짜를 자동 스킵합니다.
+    반환값: (valid_rows, is_period_excel)
     """
     if not file_path:
         print("[오류] 파일이 선택되지 않았습니다.")
-        return None
+        return None, False
 
     if not os.path.exists(file_path):
         print(f"[오류] 파일이 존재하지 않습니다: {file_path}")
-        return None
+        return None, False
 
     # 1. 성공 이력 로드 (비활성 상태 — history_log_path를 넘기지 않으면 스킵 없음)
     completed_dates = set()
@@ -51,48 +92,87 @@ def load_and_validate_fares(file_path, history_log_path=None):
 
         if df.empty:
             print("[오류] 엑셀 파일에 데이터가 없습니다.")
-            return None
+            return None, False
 
         print(f"[정보] 엑셀 로딩 완료. 총 {len(df)}개의 행을 감지했습니다.")
+
+        # 3. 기간 모드 여부 자동 감지
+        headers = [str(c).strip() for c in df.columns]
+        is_period_excel = False
+
+        # (a) 헤더에 '종료' 계열 키워드가 있으면 기간 모드
+        period_headers = ['종료일', '종료날짜', '종료', 'end date', 'enddate', 'end_date']
+        for h in headers:
+            if h.lower() in period_headers:
+                is_period_excel = True
+                break
+
+        # (b) 헤더 키워드가 없어도(헤더가 비어 Unnamed 로 잡히는 파일 포함)
+        #     '2번째 열이 날짜로 채워져 있으면' 기간 모드로 본다.
+        #     단일 모드는 2번째 열이 요금(숫자)이라 날짜 비율이 낮다 → 열 개수와 무관하게 검사.
+        if not is_period_excel and df.shape[1] >= 2:
+            col0_dates = col1_dates = total = 0
+            for v0, v1 in zip(df.iloc[:, 0], df.iloc[:, 1]):
+                r0, r1 = _is_date_like(v0), _is_date_like(v1)
+                if r0 is None and r1 is None:
+                    continue  # 양쪽 모두 빈 행은 판정에서 제외
+                total += 1
+                if r0:
+                    col0_dates += 1
+                if r1:
+                    col1_dates += 1
+            # 시작일·종료일이 둘 다 날짜인 행이 다수(60% 이상)면 기간 양식으로 확정
+            if total > 0 and col0_dates >= total * 0.6 and col1_dates >= total * 0.6:
+                is_period_excel = True
+                print(f"[정보] 2번째 열 날짜 비율로 기간 양식을 감지했습니다 "
+                      f"(시작일 {col0_dates}/{total}, 종료일 {col1_dates}/{total}).")
 
         valid_rows = []
         for idx, row in df.iterrows():
             try:
-                # 8개 열이 존재하지 않을 경우를 대비해 예외 처리 또는 패딩
                 row_len = len(row)
                 raw_date = row.iloc[0] if row_len > 0 else None
-                raw_adult_air = row.iloc[1] if row_len > 1 else 0
                 
-                # 호환성 지원: 엑셀 열이 3개뿐인 경우(기존 v1 3열 양식: 날짜, 항공비, 알선수익)
-                if row_len == 3:
-                    raw_adult_hotel = 0
-                    raw_adult_land = 0
-                    raw_adult_tour = 0
-                    raw_adult_profit = row.iloc[2]
-                    raw_child_fare = 0
-                    raw_infant_fare = 0
+                if is_period_excel:
+                    raw_date_end = row.iloc[1] if row_len > 1 else None
+                    raw_adult_air = row.iloc[2] if row_len > 2 else 0
+                    raw_adult_hotel = row.iloc[3] if row_len > 3 else 0
+                    raw_adult_land = row.iloc[4] if row_len > 4 else 0
+                    raw_adult_tour = row.iloc[5] if row_len > 5 else 0
+                    raw_adult_profit = row.iloc[6] if row_len > 6 else 0
+                    raw_child_fare = row.iloc[7] if row_len > 7 else 0
+                    raw_infant_fare = row.iloc[8] if row_len > 8 else 0
                 else:
-                    raw_adult_hotel = row.iloc[2] if row_len > 2 else 0
-                    raw_adult_land = row.iloc[3] if row_len > 3 else 0
-                    raw_adult_tour = row.iloc[4] if row_len > 4 else 0
-                    raw_adult_profit = row.iloc[5] if row_len > 5 else 0
-                    raw_child_fare = row.iloc[6] if row_len > 6 else 0
-                    raw_infant_fare = row.iloc[7] if row_len > 7 else 0
+                    raw_date_end = raw_date
+                    raw_adult_air = row.iloc[1] if row_len > 1 else 0
+                    # 호환성 지원: 엑셀 열이 3개뿐인 경우(기존 v1 3열 양식: 날짜, 항공비, 알선수익)
+                    if row_len == 3:
+                        raw_adult_hotel = 0
+                        raw_adult_land = 0
+                        raw_adult_tour = 0
+                        raw_adult_profit = row.iloc[2]
+                        raw_child_fare = 0
+                        raw_infant_fare = 0
+                    else:
+                        raw_adult_hotel = row.iloc[2] if row_len > 2 else 0
+                        raw_adult_land = row.iloc[3] if row_len > 3 else 0
+                        raw_adult_tour = row.iloc[4] if row_len > 4 else 0
+                        raw_adult_profit = row.iloc[5] if row_len > 5 else 0
+                        raw_child_fare = row.iloc[6] if row_len > 6 else 0
+                        raw_infant_fare = row.iloc[7] if row_len > 7 else 0
 
-                # 날짜 유효성 검사
-                if pd.isna(raw_date):
+                # 날짜 유효성 검증 및 정규화
+                date_str = _normalize_dt(raw_date)
+                if not date_str:
                     continue
 
-                if isinstance(raw_date, pd.Timestamp):
-                    date_str = raw_date.strftime('%Y-%m-%d')
-                else:
-                    date_str = str(raw_date).strip().split(' ')[0]
-                    if len(date_str) == 8 and date_str.isdigit():
-                        date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                date_end_str = _normalize_dt(raw_date_end)
+                if not date_end_str:
+                    date_end_str = date_str
 
                 # 이미 성공한 날짜인지 검사하여 자동 스킵
                 if date_str in completed_dates:
-                    print(f"[이어서 진행] {idx+2}행: 날짜 {date_str}는 이미 이전 실행에서 성공하여 스킵합니다.")
+                    print(f"[이어서 진행] {idx+2}행: 시작 날짜 {date_str}는 이미 이전 실행에서 성공하여 스킵합니다.")
                     continue
 
                 # 각 요금 필드 안전하게 파싱 (기본값 0)
@@ -120,6 +200,7 @@ def load_and_validate_fares(file_path, history_log_path=None):
                 valid_rows.append({
                     "row_index": idx + 2,
                     "date": date_str,
+                    "date_end": date_end_str,
                     "adult_air": adult_air,
                     "adult_hotel": adult_hotel,
                     "adult_land": adult_land,
@@ -131,12 +212,12 @@ def load_and_validate_fares(file_path, history_log_path=None):
             except Exception as e:
                 print(f"[경고] {idx+2}행 파싱 오류: {str(e)} (건너뜀)")
 
-        print(f"[정보] 유효성 검사 완료. 실행할 대상 행은 총 {len(valid_rows)}개입니다.")
-        return valid_rows
+        print(f"[정보] 유효성 검사 완료. 실행할 대상 행은 총 {len(valid_rows)}개이며, 기간 모드 여부는 {is_period_excel}입니다.")
+        return valid_rows, is_period_excel
 
     except Exception as e:
         print(f"[오류] 엑셀 데이터 처리 중 에러 발생: {str(e)}")
-        return None
+        return None, False
 
 
 def filter_fares_by_date(fares_data, mode="ALL", value=""):

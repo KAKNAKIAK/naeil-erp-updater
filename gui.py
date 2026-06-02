@@ -41,7 +41,7 @@ import pandas as pd
 import excel_loader
 import update_client
 
-APP_VERSION = "v2.0.4"
+APP_VERSION = "v3.0.0"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -733,6 +733,18 @@ class RpaGuiApp:
         self._make_toolbar_btn(toolbar, '다시실행', self.card_hover, self.border_color, self.redo_sheet)
         self._make_toolbar_btn(toolbar, '엑셀로 다운받기', self.accent_color, self.accent_hover, self.export_sheet_to_excel)
 
+        self.period_mode_var = tk.BooleanVar(value=False)
+        self.period_mode_cb = tk.Checkbutton(
+            toolbar, text="시작일/종료일 분리 (기간 입력)",
+            variable=self.period_mode_var,
+            bg=self.card_color, fg=self.fg_color,
+            activebackground=self.card_color, activeforeground=self.fg_color,
+            selectcolor=self.bg_color,
+            font=('맑은 고딕', 9),
+            command=self.on_toggle_period_mode
+        )
+        self.period_mode_cb.pack(side=tk.RIGHT, padx=(10, 0))
+
         # 수식 입력줄(formula bar): '=' 식 편집 중 표의 칸을 클릭하면 참조가 삽입된다
         fb_frame = tk.Frame(sheet_card, bg=self.card_color)
         fb_frame.pack(fill=tk.X, pady=(0, 6))
@@ -895,6 +907,77 @@ class RpaGuiApp:
             self.toggle_btn.config(text='◀ 입력표 접기')
             self.root.geometry(f'{self.expanded_width}x{self.win_height}')
 
+    def get_fare_cols(self):
+        is_period = self.period_mode_var.get()
+        offset = 1 if is_period else 0
+        return [1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset, 7 + offset]
+
+    def is_date_col(self, col):
+        is_period = self.period_mode_var.get()
+        if is_period:
+            return col in (0, 1)
+        return col == 0
+
+    def on_toggle_period_mode(self):
+        is_period = self.period_mode_var.get()
+        try:
+            current_data = self.sheet.get_sheet_data()
+        except Exception:
+            current_data = []
+
+        # Shift formula coordinates
+        new_formulas = {}
+        if is_period:
+            # 8 -> 9 columns: column 0 (Date) -> 0 (Start Date), insert 1 (End Date)
+            # Other columns shift right by 1: c -> c + 1 for c >= 1
+            for (r, c), f in self.formulas.items():
+                if c >= 1:
+                    new_formulas[(r, c + 1)] = f
+                else:
+                    new_formulas[(r, c)] = f
+            
+            # Update data: duplicate column 0 to column 1
+            new_data = []
+            for row in current_data:
+                row_extended = list(row) + [""] * max(0, 8 - len(row))
+                new_row = [row_extended[0], row_extended[0]] + row_extended[1:8]
+                new_data.append(new_row)
+                
+            headers = ["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"]
+            col_widths = [100, 100, 75, 75, 75, 75, 75, 70, 70]
+        else:
+            # 9 -> 8 columns: column 0 -> 0, remove 1
+            # Other columns shift left by 1: c -> c - 1 for c >= 2
+            for (r, c), f in self.formulas.items():
+                if c >= 2:
+                    new_formulas[(r, c - 1)] = f
+                elif c == 0:
+                    new_formulas[(r, c)] = f
+                # c == 1 (End Date) is dropped
+                
+            new_data = []
+            for row in current_data:
+                row_extended = list(row) + [""] * max(0, 9 - len(row))
+                new_row = [row_extended[0]] + row_extended[2:9]
+                new_data.append(new_row)
+                
+            headers = ["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"]
+            col_widths = [100, 80, 80, 80, 80, 80, 80, 80]
+            
+        self.formulas = new_formulas
+        self._results.clear()  # Clear cache to recalculate
+        
+        self.sheet.headers(headers)
+        self.sheet.set_sheet_data(new_data, reset_col_positions=True, reset_row_positions=False)
+        try:
+            self.sheet.set_column_widths(col_widths)
+        except Exception:
+            pass
+            
+        self._recalc_formulas()
+        self.refresh_count()
+        self._load_active_into_fb()
+
     # ------------------------------------------------------------------
     # 그리드 조작
     # ------------------------------------------------------------------
@@ -935,7 +1018,7 @@ class RpaGuiApp:
         except Exception:
             return
         for r, row in enumerate(data):
-            for col in (COL_ADULT_AIR, COL_ADULT_HOTEL, COL_ADULT_LAND, COL_ADULT_TOUR, COL_ADULT_PROFIT, COL_CHILD, COL_INFANT):
+            for col in self.get_fare_cols():
                 text = '' if (len(row) <= col or row[col] is None) else str(row[col]).strip()
                 key = (r, col)
                 if text.startswith('='):
@@ -955,12 +1038,14 @@ class RpaGuiApp:
             except Exception:
                 return
             changed = False
+            is_period = self.period_mode_var.get()
+            num_cols = 9 if is_period else 8
             for (r, col), formula in list(self.formulas.items()):
                 if r >= len(data):
                     self.formulas.pop((r, col), None)
                     self._results.pop((r, col), None)
                     continue
-                row_cells = [data[r][i] if i < len(data[r]) else '' for i in range(8)]
+                row_cells = [data[r][i] if i < len(data[r]) else '' for i in range(num_cols)]
                 row_cells[col] = formula  # 해당 칸은 식으로 평가
                 val = self._eval_cell(row_cells, col)
                 if val is None:
@@ -1020,14 +1105,16 @@ class RpaGuiApp:
         return value
 
     def _last_data_row(self):
-        """데이터(날짜/항공비/알선수익 중 하나라도)가 있는 마지막 행 인덱스. 없으면 -1."""
+        """데이터가 있는 마지막 행 인덱스. 없으면 -1."""
         try:
             data = self.sheet.get_sheet_data()
         except Exception:
             return -1
         last = -1
+        is_period = self.period_mode_var.get()
+        num_cols = 9 if is_period else 8
         for i, row in enumerate(data):
-            for k in range(min(8, len(row))):
+            for k in range(min(num_cols, len(row))):
                 if row[k] is not None and str(row[k]).strip():
                     last = i
                     break
@@ -1037,7 +1124,8 @@ class RpaGuiApp:
         formula = self.formulas.get((r, c))
         if not formula:
             return
-        col_name = SHORT_COL_NAMES[c] if c < len(SHORT_COL_NAMES) else f'{c}열'
+        headers = self.sheet.headers()
+        col_name = headers[c] if c < len(headers) else f'{c}열'
         last = self._last_data_row()
         rows_n = last + 1 if last >= 0 else 0
         msg = (f"이 칸의 계산식\n\n    {formula}\n\n"
@@ -1113,11 +1201,18 @@ class RpaGuiApp:
 
         self.refresh_count()
         self._load_active_into_fb()
-        self.set_status(f"'{SHORT_COL_NAMES[col]}' 열 {last + 1}개 행에 수식을 적용했습니다.", self.accent_green)
+        try:
+            col_name = self.sheet.headers()[col]
+        except Exception:
+            col_name = f'{col}열'
+        self.set_status(f"'{col_name}' 열 {last + 1}개 행에 수식을 적용했습니다.", self.accent_green)
 
     # 칸 참조 이름 → 컬럼 인덱스 매핑
-    @staticmethod
-    def _name_to_col(name, cur_col):
+    def _name_to_col(self, name, cur_col):
+        # 기간 모드(9열)에서는 시작일/종료일이 0,1번을 차지하므로
+        # 요금 열이 1칸씩 밀린다. 이름 매핑은 단일 모드 기준 상수에
+        # offset(+1)을 더해 실제 열을 계산한다.
+        offset = 1 if self.period_mode_var.get() else 0
         n = str(name).strip()
         low = n.lower()
         if n in ('앞의열', '앞열', '앞칸', '왼칸', '왼쪽', '왼쪽칸'):
@@ -1125,29 +1220,26 @@ class RpaGuiApp:
         if n in ('뒤의열', '뒤열', '뒤칸', '오른칸', '오른쪽', '오른쪽칸'):
             return cur_col + 1
         if n in ('항공비', '항공비(성인)', '성인항공비'):
-            return COL_ADULT_AIR
+            return COL_ADULT_AIR + offset
         if n in ('호텔비', '호텔비(성인)', '성인호텔비'):
-            return COL_ADULT_HOTEL
+            return COL_ADULT_HOTEL + offset
         if n in ('지상비', '지상비(성인)', '성인지상비'):
-            return COL_ADULT_LAND
+            return COL_ADULT_LAND + offset
         if n in ('여행경비', '경비', '여행경비(성인)', '성인여행경비'):
-            return COL_ADULT_TOUR
+            return COL_ADULT_TOUR + offset
         if n in ('알선수익', '알선수익(성인)', '성인알선수익'):
-            return COL_ADULT_PROFIT
+            return COL_ADULT_PROFIT + offset
         if n in ('소아', '소아요금', '아동', '아동요금'):
-            return COL_CHILD
+            return COL_CHILD + offset
         if n in ('유아', '유아요금'):
-            return COL_INFANT
-        if n in ('날짜',):
+            return COL_INFANT + offset
+        if n in ('날짜', '시작일', '출발일'):
             return COL_DATE
-        if low == 'a': return 0
-        if low == 'b': return 1
-        if low == 'c': return 2
-        if low == 'd': return 3
-        if low == 'e': return 4
-        if low == 'f': return 5
-        if low == 'g': return 6
-        if low == 'h': return 7
+        if n in ('종료일', '도착일') and offset:
+            return 1  # 기간 모드 종료일
+        # A,B,C... 는 그리드의 절대 열 문자이므로 모드와 무관하게 그대로 매핑
+        if len(low) == 1 and 'a' <= low <= 'i':
+            return ord(low) - ord('a')
         return None
 
     def _eval_cell(self, row_cells, col, _stack=None):
@@ -1165,7 +1257,7 @@ class RpaGuiApp:
 
             def resolver(name):
                 target = self._name_to_col(name, col)
-                if target is None or target == COL_DATE:
+                if target is None or self.is_date_col(target):
                     return None  # 날짜 칸은 계산 참조 대상이 아님
                 return self._eval_cell(row_cells, target, next_stack)
 
@@ -1188,18 +1280,19 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     # 수식 입력줄 + 클릭 참조 (엑셀식)
     # ------------------------------------------------------------------
-    @staticmethod
-    def _ref_name_for_col(c):
-        return {
-            COL_DATE: '날짜',
-            COL_ADULT_AIR: '항공비',
-            COL_ADULT_HOTEL: '호텔비',
-            COL_ADULT_LAND: '지상비',
-            COL_ADULT_TOUR: '여행경비',
-            COL_ADULT_PROFIT: '알선수익',
-            COL_CHILD: '소아',
-            COL_INFANT: '유아'
-        }.get(c)
+    def _ref_name_for_col(self, c):
+        # 그리드의 실시간 헤더명을 참조 이름으로 사용한다.
+        # (단일/기간 모드 전환 시 열 구성이 달라져도 헤더를 그대로 따라간다)
+        if c is None or c < 0:
+            return None
+        try:
+            headers = self.sheet.headers()
+        except Exception:
+            return None
+        if c >= len(headers):
+            return None
+        name = str(headers[c]).strip()
+        return name or None
 
     # ---- 인셀 클릭 참조 (셀 편집 중 '=' 상태에서 다른 칸 클릭 → 참조 삽입) ----
     def _editor_is_formula(self):
@@ -1303,8 +1396,8 @@ class RpaGuiApp:
     def _commit_formula_bar(self, event=None):
         r, c = self._active_cell
         text = self.fb_var.get()
-        # 수식이면 보관소에 등록, 아니면 해제
-        if text.lstrip().startswith('=') and c != COL_DATE:
+        # 수식이면 보관소에 등록, 아니면 해제 (날짜 열에는 수식 등록 불가)
+        if text.lstrip().startswith('=') and not self.is_date_col(c):
             self.formulas[(r, c)] = text
         else:
             self.formulas.pop((r, c), None)
@@ -1386,23 +1479,52 @@ class RpaGuiApp:
         if not path:
             return
         try:
-            data = excel_loader.load_and_validate_fares(path)
+            data_res = excel_loader.load_and_validate_fares(path)
         except Exception as e:
             messagebox.showerror('엑셀 불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{e}')
             return
-        if not data:
+        if not data_res or not data_res[0]:
             messagebox.showwarning('엑셀 불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.')
             return
-        grid = [[
-            d['date'], 
-            str(d['adult_air']), 
-            str(d['adult_hotel']), 
-            str(d['adult_land']), 
-            str(d['adult_tour']), 
-            str(d['adult_profit']), 
-            str(d['child_fare']), 
-            str(d['infant_fare'])
-        ] for d in data]
+            
+        data, is_period = data_res
+        
+        # Set checkbox state based on excel data format
+        self.period_mode_var.set(is_period)
+        
+        # Rebuild layout to match loaded Excel mode
+        headers = ["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"] if is_period else ["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"]
+        col_widths = [100, 100, 75, 75, 75, 75, 75, 70, 70] if is_period else [100, 80, 80, 80, 80, 80, 80, 80]
+        self.sheet.headers(headers)
+        try:
+            self.sheet.set_column_widths(col_widths)
+        except Exception:
+            pass
+            
+        if is_period:
+            grid = [[
+                d['date'], 
+                d['date_end'],
+                str(d['adult_air']), 
+                str(d['adult_hotel']), 
+                str(d['adult_land']), 
+                str(d['adult_tour']), 
+                str(d['adult_profit']), 
+                str(d['child_fare']), 
+                str(d['infant_fare'])
+            ] for d in data]
+        else:
+            grid = [[
+                d['date'], 
+                str(d['adult_air']), 
+                str(d['adult_hotel']), 
+                str(d['adult_land']), 
+                str(d['adult_tour']), 
+                str(d['adult_profit']), 
+                str(d['child_fare']), 
+                str(d['infant_fare'])
+            ] for d in data]
+            
         self.formulas.clear()
         self._results.clear()
         self.sheet.set_sheet_data(grid, reset_col_positions=False, reset_row_positions=True)
@@ -1430,9 +1552,13 @@ class RpaGuiApp:
                 messagebox.showwarning("저장 실패", "저장할 데이터가 없습니다.")
                 return
             
+            is_period = self.period_mode_var.get()
+            num_cols = 9 if is_period else 8
+            headers = ["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아요금", "유아요금"] if is_period else SHEET_HEADERS
+
             data_list = []
             for r in raw:
-                r_padded = [r[k] if k < len(r) else "" for k in range(8)]
+                r_padded = [r[k] if k < len(r) else "" for k in range(num_cols)]
                 r_cleaned = ["" if x is None else str(x).strip() for x in r_padded]
                 if not any(r_cleaned):
                     continue
@@ -1442,10 +1568,11 @@ class RpaGuiApp:
                 messagebox.showwarning("저장 실패", "저장할 유효한 요금 데이터가 없습니다.")
                 return
 
-            df = pd.DataFrame(data_list, columns=SHEET_HEADERS)
+            df = pd.DataFrame(data_list, columns=headers)
             
             # 요금 관련 컬럼은 정수로 형변환하여 저장
-            for col in SHEET_HEADERS[1:]:
+            target_cols = headers[2:] if is_period else headers[1:]
+            for col in target_cols:
                 def clean_numeric(val):
                     if not val:
                         return ""
@@ -1462,19 +1589,97 @@ class RpaGuiApp:
             messagebox.showerror("저장 실패", f"엑셀 파일 저장 중 오류가 발생했습니다.\n{e}")
             print(f"[오류] 엑셀 내보내기 실패: {str(e)}")
 
+    def _ask_template_format(self):
+        """엑셀 양식 종류를 라디오 버튼으로 선택받는다.
+        반환: 'single' | 'period' | None(취소)"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title('엑셀 양식 선택')
+        dlg.configure(bg=self.bg_color)
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+
+        result = {'value': None}
+        # 현재 그리드 모드를 기본 선택으로 둔다
+        sel = tk.StringVar(value=('period' if self.period_mode_var.get() else 'single'))
+
+        pad = tk.Frame(dlg, bg=self.bg_color, padx=20, pady=16)
+        pad.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(pad, text='어떤 양식으로 받으시겠어요?', font=('맑은 고딕', 11, 'bold'),
+                 bg=self.bg_color, fg=self.fg_color).pack(anchor=tk.W, pady=(0, 12))
+
+        rb_kwargs = dict(bg=self.bg_color, fg=self.fg_color, selectcolor=self.bg_color,
+                         activebackground=self.bg_color, activeforeground=self.fg_color,
+                         font=('맑은 고딕', 10), anchor=tk.W)
+        tk.Radiobutton(pad, text='단일 날짜 양식', variable=sel, value='single', **rb_kwargs).pack(fill=tk.X)
+        tk.Label(pad, text='        날짜를 한 칸에 입력 (하루 또는 날짜별 요금)', font=('맑은 고딕', 8),
+                 bg=self.bg_color, fg=self.fg_muted).pack(anchor=tk.W, pady=(0, 8))
+        tk.Radiobutton(pad, text='기간 입력 양식', variable=sel, value='period', **rb_kwargs).pack(fill=tk.X)
+        tk.Label(pad, text='        시작일·종료일로 입력 (같은 요금이 이어지는 구간)', font=('맑은 고딕', 8),
+                 bg=self.bg_color, fg=self.fg_muted).pack(anchor=tk.W, pady=(0, 14))
+
+        btn_row = tk.Frame(pad, bg=self.bg_color)
+        btn_row.pack(fill=tk.X)
+
+        def on_download():
+            result['value'] = sel.get()
+            dlg.destroy()
+
+        def on_cancel():
+            result['value'] = None
+            dlg.destroy()
+
+        cancel_btn = tk.Button(btn_row, text='취소', command=on_cancel,
+                               bg=self.card_color, fg=self.fg_color,
+                               activebackground=self.card_hover, activeforeground=self.fg_color,
+                               bd=0, relief=tk.FLAT, font=('맑은 고딕', 9), padx=14, pady=6, cursor='hand2')
+        cancel_btn.pack(side=tk.RIGHT)
+        dl_btn = tk.Button(btn_row, text='다운받기', command=on_download,
+                           bg=self.accent_color, fg='white',
+                           activebackground=self.accent_hover, activeforeground='white',
+                           bd=0, relief=tk.FLAT, font=('맑은 고딕', 9, 'bold'), padx=14, pady=6, cursor='hand2')
+        dl_btn.pack(side=tk.RIGHT, padx=(0, 8))
+
+        dlg.bind('<Return>', lambda e: on_download())
+        dlg.bind('<Escape>', lambda e: on_cancel())
+        dlg.protocol('WM_DELETE_WINDOW', on_cancel)
+
+        # 부모 창 중앙에 배치
+        dlg.update_idletasks()
+        try:
+            rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+            rw, rh = self.root.winfo_width(), self.root.winfo_height()
+            w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+            x, y = rx + (rw - w) // 2, ry + (rh - h) // 2
+            dlg.geometry(f'+{max(x, 0)}+{max(y, 0)}')
+        except Exception:
+            pass
+
+        dlg.grab_set()
+        dl_btn.focus_set()
+        self.root.wait_window(dlg)
+        return result['value']
+
     def download_excel_template(self):
-        """그리드와 동일한 헤더 구조를 갖는 빈 엑셀 양식을 다운로드합니다."""
+        """양식 종류(단일/기간)를 선택받아 빈 엑셀 양식을 다운로드합니다."""
+        choice = self._ask_template_format()
+        if choice is None:
+            return  # 취소
+
+        is_period = (choice == 'period')
+        default_name = "ERP 요금수정 양식 (기간)" if is_period else "ERP 요금수정 양식 (단일)"
         file_path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
             filetypes=[("Excel Files", "*.xlsx")],
             title="엑셀 양식 다운로드",
-            initialfile="ERP 요금수정 양식"
+            initialfile=default_name
         )
         if not file_path:
             return
-        
+
         try:
-            df = pd.DataFrame(columns=SHEET_HEADERS)
+            headers = ["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아요금", "유아요금"] if is_period else SHEET_HEADERS
+            df = pd.DataFrame(columns=headers)
             df.to_excel(file_path, index=False)
             messagebox.showinfo("다운로드 완료", f"엑셀 양식 파일이 생성되었습니다.\n경로: {file_path}")
             print(f"[양식 다운로드] 엑셀 양식 파일을 저장했습니다: {file_path}")
@@ -1484,35 +1689,69 @@ class RpaGuiApp:
 
     def read_sheet_data(self):
         """그리드를 읽어 (유효행 리스트, 오류메시지 리스트)를 반환한다.
-        유효행: {row_index, date, adult_air, adult_hotel, adult_land, adult_tour, adult_profit, child_fare, infant_fare}"""
+        유효행: {row_index, date, date_end, adult_air, adult_hotel, adult_land, adult_tour, adult_profit, child_fare, infant_fare}"""
         raw = self.sheet.get_sheet_data()
         rows = []
         errors = []
+        is_period = self.period_mode_var.get()
+        num_cols = 9 if is_period else 8
+        
+        # Columns offsets based on mode
+        offset = 1 if is_period else 0
+        col_date = 0
+        col_date_end = 1 if is_period else None
+        col_adult_air = 1 + offset
+        col_adult_hotel = 2 + offset
+        col_adult_land = 3 + offset
+        col_adult_tour = 4 + offset
+        col_adult_profit = 5 + offset
+        col_child = 6 + offset
+        col_infant = 7 + offset
+        
         for i, r in enumerate(raw):
-            r_padded = [r[k] if k < len(r) else None for k in range(8)]
-            date_cell = str(r_padded[COL_DATE]).strip() if r_padded[COL_DATE] is not None else ""
-            adult_air_cell = str(r_padded[COL_ADULT_AIR]).strip() if r_padded[COL_ADULT_AIR] is not None else ""
-            adult_hotel_cell = str(r_padded[COL_ADULT_HOTEL]).strip() if r_padded[COL_ADULT_HOTEL] is not None else ""
-            adult_land_cell = str(r_padded[COL_ADULT_LAND]).strip() if r_padded[COL_ADULT_LAND] is not None else ""
-            adult_tour_cell = str(r_padded[COL_ADULT_TOUR]).strip() if r_padded[COL_ADULT_TOUR] is not None else ""
-            adult_profit_cell = str(r_padded[COL_ADULT_PROFIT]).strip() if r_padded[COL_ADULT_PROFIT] is not None else ""
-            child_cell = str(r_padded[COL_CHILD]).strip() if r_padded[COL_CHILD] is not None else ""
-            infant_cell = str(r_padded[COL_INFANT]).strip() if r_padded[COL_INFANT] is not None else ""
-
-            # 완전히 빈 행은 조용히 건너뜀
-            if not date_cell and not adult_air_cell and not adult_hotel_cell and not adult_land_cell and not adult_tour_cell and not adult_profit_cell and not child_cell and not infant_cell:
+            r_padded = [r[k] if k < len(r) else None for k in range(num_cols)]
+            
+            # Helper to check if row is completely empty
+            non_empty_cells = [str(x).strip() for x in r_padded if x is not None and str(x).strip() != ""]
+            if not non_empty_cells:
                 continue
+                
+            date_cell = str(r_padded[col_date]).strip() if r_padded[col_date] is not None else ""
+            date_end_cell = ""
+            if is_period and col_date_end is not None:
+                date_end_cell = str(r_padded[col_date_end]).strip() if r_padded[col_date_end] is not None else ""
+                if not date_end_cell:
+                    date_end_cell = date_cell  # Fallback to start date if blank
+            else:
+                date_end_cell = date_cell
+                
+            adult_air_cell = str(r_padded[col_adult_air]).strip() if r_padded[col_adult_air] is not None else ""
+            adult_hotel_cell = str(r_padded[col_adult_hotel]).strip() if r_padded[col_adult_hotel] is not None else ""
+            adult_land_cell = str(r_padded[col_adult_land]).strip() if r_padded[col_adult_land] is not None else ""
+            adult_tour_cell = str(r_padded[col_adult_tour]).strip() if r_padded[col_adult_tour] is not None else ""
+            adult_profit_cell = str(r_padded[col_adult_profit]).strip() if r_padded[col_adult_profit] is not None else ""
+            child_cell = str(r_padded[col_child]).strip() if r_padded[col_child] is not None else ""
+            infant_cell = str(r_padded[col_infant]).strip() if r_padded[col_infant] is not None else ""
 
             line = i + 1
             norm_date = normalize_date(date_cell)
             if not norm_date:
-                errors.append(f"{line}행: 날짜 형식 오류 ('{date_cell}')")
+                errors.append(f"{line}행: 시작 날짜 형식 오류 ('{date_cell}')")
+                continue
+                
+            norm_date_end = normalize_date(date_end_cell)
+            if not norm_date_end:
+                errors.append(f"{line}행: 종료 날짜 형식 오류 ('{date_end_cell}')")
+                continue
+                
+            if norm_date > norm_date_end:
+                errors.append(f"{line}행: 시작 날짜('{norm_date}')가 종료 날짜('{norm_date_end}')보다 늦습니다")
                 continue
 
-            row_cells = [date_cell, adult_air_cell, adult_hotel_cell, adult_land_cell, adult_tour_cell, adult_profit_cell, child_cell, infant_cell]
+            row_cells = list(r_padded)
             
-            def coerce_val(col, label):
-                val = self._coerce_fare(row_cells, col)
+            def coerce_val(col_idx, label):
+                val = self._coerce_fare(row_cells, col_idx)
                 if val is None:
                     return 0
                 if val < 0:
@@ -1520,17 +1759,18 @@ class RpaGuiApp:
                     return 0
                 return val
 
-            adult_air = coerce_val(COL_ADULT_AIR, "항공비(성인)")
-            adult_hotel = coerce_val(COL_ADULT_HOTEL, "호텔비(성인)")
-            adult_land = coerce_val(COL_ADULT_LAND, "지상비(성인)")
-            adult_tour = coerce_val(COL_ADULT_TOUR, "여행경비(성인)")
-            adult_profit = coerce_val(COL_ADULT_PROFIT, "알선수익(성인)")
-            child_fare = coerce_val(COL_CHILD, "소아요금")
-            infant_fare = coerce_val(COL_INFANT, "유아요금")
+            adult_air = coerce_val(col_adult_air, "항공비(성인)")
+            adult_hotel = coerce_val(col_adult_hotel, "호텔비(성인)")
+            adult_land = coerce_val(col_adult_land, "지상비(성인)")
+            adult_tour = coerce_val(col_adult_tour, "여행경비(성인)")
+            adult_profit = coerce_val(col_adult_profit, "알선수익(성인)")
+            child_fare = coerce_val(col_child, "소아요금")
+            infant_fare = coerce_val(col_infant, "유아요금")
 
             rows.append({
                 "row_index": line, 
                 "date": norm_date, 
+                "date_end": norm_date_end,
                 "adult_air": adult_air, 
                 "adult_hotel": adult_hotel, 
                 "adult_land": adult_land, 
@@ -1542,7 +1782,14 @@ class RpaGuiApp:
         return rows, errors
 
     def _apply_date_filter(self, rows):
-        """그리드에서 읽은 행 리스트에 날짜 필터를 적용한다(콘솔 출력 없음)."""
+        """그리드에서 읽은 행 리스트에 날짜 필터를 적용한다(콘솔 출력 없음).
+        기간 모드에서는 각 행이 [date ~ date_end] 구간을 가지므로,
+        '겹치기만 하면 포함' 기준으로 종료일까지 고려한다.
+        단일 모드는 date_end == date 라서 동일 로직이 그대로 들어맞는다."""
+        def _end(r):
+            # 안전장치: date_end 가 없으면 시작일과 동일하게 취급
+            return r.get("date_end") or r["date"]
+
         mode = self.filter_mode.get()
         if mode == "ALL":
             return list(rows)
@@ -1550,7 +1797,8 @@ class RpaGuiApp:
             v = normalize_date(self.filter_value.get())
             if not v:
                 return list(rows)
-            return [r for r in rows if r["date"] >= v]
+            # 기간이 기준일까지 닿으면(종료일 >= 기준일) 포함
+            return [r for r in rows if _end(r) >= v]
         if mode == "SPECIFIC":
             toks = set()
             for d in self.filter_value.get().split(','):
@@ -1559,7 +1807,8 @@ class RpaGuiApp:
                     toks.add(nd)
             if not toks:
                 return list(rows)
-            return [r for r in rows if r["date"] in toks]
+            # 지정일 중 하나라도 기간 구간 안에 들어오면 포함
+            return [r for r in rows if any(r["date"] <= t <= _end(r) for t in toks)]
         if mode == "DATE_RANGE":
             s = normalize_date(self.filter_value.get())
             e = normalize_date(self.filter_value_end.get())
@@ -1567,7 +1816,8 @@ class RpaGuiApp:
                 return list(rows)
             if s > e:
                 s, e = e, s
-            return [r for r in rows if s <= r["date"] <= e]
+            # 기간 [date~date_end] 와 [s~e] 가 겹치면 포함
+            return [r for r in rows if r["date"] <= e and _end(r) >= s]
         return list(rows)
 
     def refresh_count(self, *args):
@@ -1935,6 +2185,9 @@ class RpaGuiApp:
                     break
 
                 date_val = str(row["date"]).strip()
+                date_end_val = str(row.get("date_end", date_val)).strip()
+                date_log_str = f"{date_val} ~ {date_end_val}" if date_val != date_end_val else date_val
+
                 adult_air = str(row.get("adult_air", 0)).strip()
                 adult_hotel = str(row.get("adult_hotel", 0)).strip()
                 adult_land = str(row.get("adult_land", 0)).strip()
@@ -1944,25 +2197,53 @@ class RpaGuiApp:
                 infant_val = str(row.get("infant_fare", 0)).strip()
 
                 print(f"\n========================================================")
-                print(f"[{index+1}/{total_items}] 대상 날짜: {date_val}")
+                print(f"[{index+1}/{total_items}] 대상 날짜: {date_log_str}")
                 print(f" -> 입력 데이터: 성인(항공={adult_air}, 호텔={adult_hotel}, 지상={adult_land}, 경비={adult_tour}, 수익={adult_profit}), 소아={child_val}, 유아={infant_val}")
 
                 if not self.find_and_switch_frame(selectors["search_date_input"]):
                     err_msg = "출발일자 입력 필드를 찾을 수 없습니다."
                     print(f" -> [오류] {err_msg}")
-                    rpa_history.append({"date": date_val, "status": "FAIL", "error": err_msg})
+                    rpa_history.append({"date": date_log_str, "status": "FAIL", "error": err_msg})
                     self.update_progress_ui(index + 1, total_items)
                     continue
 
                 try:
                     st_date_input = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_input"])
-                    en_date_input = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_end_input"])
 
+                    # 1) 시작일 입력 후, datepicker 의 '시작일 변경 시 종료일을 시작일로 맞추는'
+                    #    자동 리셋 동작을 먼저 발생시킨다(change/blur). 그래야 그 다음에 넣는
+                    #    종료일이 리셋에 덮이지 않는다.
                     self.driver.execute_script("arguments[0].value = '';", st_date_input)
                     st_date_input.send_keys(date_val)
+                    self.driver.execute_script(
+                        "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+                        "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+                        st_date_input)
 
-                    self.driver.execute_script("arguments[0].value = '';", en_date_input)
-                    en_date_input.send_keys(date_val)
+                    # 2) 종료일을 마지막에 입력하고, 위젯이 값을 무시/리셋하는 경우를 대비해
+                    #    실제 표시값을 다시 읽어 일치할 때까지 최대 4회 재입력한다.
+                    def _read_end_value():
+                        try:
+                            el = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_end_input"])
+                            return (el.get_attribute('value') or '').strip().replace('.', '-').replace('/', '-')
+                        except Exception:
+                            return ''
+
+                    for _ in range(4):
+                        en_date_input = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_end_input"])
+                        self.driver.execute_script("arguments[0].value = '';", en_date_input)
+                        en_date_input.send_keys(date_end_val)
+                        self.driver.execute_script(
+                            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+                            "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+                            en_date_input)
+                        if _read_end_value() == date_end_val:
+                            break
+                        time.sleep(0.2)
+
+                    if _read_end_value() != date_end_val:
+                        print(f" -> [경고] 종료일이 ERP에 '{_read_end_value()}'(으)로 남아 기대값({date_end_val})과 다릅니다. "
+                              f"해당 기간 일부 상품이 조회/수정에서 누락될 수 있으니 ERP에서 직접 확인해 주세요.")
 
                     search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
                     self.driver.execute_script("arguments[0].click();", search_btn)
@@ -1970,6 +2251,7 @@ class RpaGuiApp:
 
                     wait = WebDriverWait(self.driver, driver_timeout, poll_frequency=erp_poll_interval)
                     norm_date = date_val.replace('-', '').replace('.', '').replace('/', '')
+                    norm_date_end = date_end_val.replace('-', '').replace('.', '').replace('/', '')
                     matched = False
                     deadline = time.time() + driver_timeout
 
@@ -1986,14 +2268,14 @@ class RpaGuiApp:
                             if len(cell_txt) == 10 and cell_txt[4] == '-' and cell_txt[7] == '-':
                                 dates_seen.add(cell_txt.replace('-', '').replace('.', '').replace('/', ''))
 
-                        if dates_seen == {norm_date}:
+                        if dates_seen and all(norm_date <= d <= norm_date_end for d in dates_seen):
                             matched = True
                             break
                         time.sleep(erp_poll_interval)
 
                     if not matched:
-                        print(f" -> [조회결과 없음] {date_val} 일자 데이터를 반영하지 못했습니다. ERP에서 직접 날짜 조회를 확인해 주세요.")
-                        rpa_history.append({"date": date_val, "status": "SKIP", "error": "조회결과 없음"})
+                        print(f" -> [조회결과 없음] {date_log_str} 일자 데이터를 반영하지 못했습니다. ERP에서 직접 날짜 조회를 확인해 주세요.")
+                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "조회결과 없음"})
                         self.update_progress_ui(index + 1, total_items)
                         continue
 
@@ -2088,13 +2370,13 @@ class RpaGuiApp:
 
                     self.wait_until_grid_ready_after_save(selectors, driver_timeout)
 
-                    print(f" -> [성공] {date_val} 요금 업데이트 완료")
-                    rpa_history.append({"date": date_val, "status": "SUCCESS", "error": ""})
+                    print(f" -> [성공] {date_log_str} 요금 업데이트 완료")
+                    rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
 
                 except Exception as row_ex:
                     err_msg = str(row_ex).replace("\n", " ")
                     print(f" -> [실패] 오류 발생: {err_msg}")
-                    rpa_history.append({"date": date_val, "status": "FAIL", "error": err_msg})
+                    rpa_history.append({"date": date_log_str, "status": "FAIL", "error": err_msg})
 
                     try:
                         self.driver.switch_to.alert.accept()
