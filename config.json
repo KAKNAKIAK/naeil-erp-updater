@@ -18,6 +18,8 @@
   "grid_id": "#gridMain",
   "grid_page_size": 500,
   "paging_search_button": "#gridMain_r",
+  "page_max_retries": 3,
+  "erp_page_pause": 1.0,
   "selectors": {
     "login_id": "input[name='userId']",
     "login_pw": "input[name='userPw']",

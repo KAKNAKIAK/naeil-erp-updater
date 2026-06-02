@@ -41,7 +41,7 @@ import pandas as pd
 import excel_loader
 import update_client
 
-APP_VERSION = "v3.0.2"
+APP_VERSION = "v3.0.3"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -2175,6 +2175,122 @@ class RpaGuiApp:
             f"데이터 누락을 막기 위해 이 기간 처리를 중단합니다."
         )
 
+    def _dismiss_alert_and_modal(self, selectors):
+        """떠 있는 네이티브 얼럿(예: 408 서버 지연)과 열린 요금 모달을 정리한다.
+        페이지 저장 재시도 전에 화면을 깨끗한 상태로 되돌리기 위해 사용."""
+        for _ in range(5):
+            try:
+                al = self.driver.switch_to.alert
+                print(f" -> [얼럿 정리]: {(al.text or '')[:80]}")
+                al.accept()
+                time.sleep(0.3)
+            except Exception:
+                break
+        try:
+            self.driver.switch_to.default_content()
+            self.find_and_switch_frame(selectors["cancel_button"])
+            cbs = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
+            if cbs and cbs[0].is_displayed():
+                self.driver.execute_script("arguments[0].click();", cbs[0])
+        except Exception:
+            pass
+
+    def _save_current_page(self, selectors, wait, inputs_mapping, driver_timeout,
+                           erp_short_pause, erp_poll_interval):
+        """현재 페이지를 전체선택 → 요금 모달 → 값 주입 → 이중검증 → 저장 → 얼럿 처리 →
+        모달 닫기 → 그리드 준비 대기까지 1회 수행한다.
+
+        저장 결과 얼럿이 408/지연/오류성 문구이면 '저장 실패 가능'으로 보고 예외를 던져
+        상위 루프가 재시도하도록 한다(서버 지연으로 저장이 누락되는 것을 막기 위함)."""
+        # 1) 전체 선택
+        header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
+        if not header_chk.is_selected():
+            self.driver.execute_script("arguments[0].click();", header_chk)
+            try:
+                WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
+                    lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
+                )
+            except Exception:
+                time.sleep(erp_short_pause)
+
+        # 2) 요금 모달 열기
+        update_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["update_button"])
+        self.driver.execute_script("arguments[0].click();", update_btn)
+        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selectors["adult_air_input"])))
+
+        # 3) 값 주입 (콤마 포매터 때문에 값 한 번에 주입 후 이벤트만 발생)
+        for key, val in inputs_mapping.items():
+            inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
+            self.driver.execute_script(
+                """
+                const el = arguments[0], v = arguments[1];
+                el.focus();
+                el.value = v;
+                el.dispatchEvent(new Event('input',  {bubbles:true}));
+                el.dispatchEvent(new Event('keyup',  {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.dispatchEvent(new Event('blur',   {bubbles:true}));
+                """,
+                inp, str(val)
+            )
+        time.sleep(erp_short_pause)
+
+        # 4) 저장 전 검증
+        def _digits_to_int(text):
+            digits = "".join(ch for ch in str(text) if ch.isdigit())
+            return int(digits) if digits else 0
+
+        mismatches = []
+        for key, val in inputs_mapping.items():
+            inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
+            actual_raw = self.driver.execute_script("return arguments[0].value;", inp)
+            if _digits_to_int(actual_raw) != _digits_to_int(val):
+                mismatches.append(f"{key}: 기대 {_digits_to_int(val)} / 실제 '{actual_raw}'")
+        if mismatches:
+            try:
+                cancel_btns = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
+                if cancel_btns:
+                    self.driver.execute_script("arguments[0].click();", cancel_btns[0])
+            except Exception:
+                pass
+            raise RuntimeError("입력값 검증 실패(저장 안 함) - " + "; ".join(mismatches))
+
+        # 5) 저장
+        save_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["save_button"])
+        self.driver.execute_script("arguments[0].click();", save_btn)
+
+        # 6) 저장 확인/결과 얼럿 처리 — 오류성 얼럿이면 저장 실패로 간주
+        error_keywords = ('408', '지연', '연결이 원활', '관리자에게 문의', '오류가', '실패')
+        save_alert_error = None
+        for _ in range(4):
+            try:
+                alert = self.driver.switch_to.alert
+                atext = alert.text or ''
+                print(f" -> [얼럿 감지]: {atext}")
+                if any(k in atext for k in error_keywords):
+                    save_alert_error = atext
+                    alert.accept()
+                    break
+                alert.accept()
+                time.sleep(erp_short_pause)
+            except Exception:
+                break
+        if save_alert_error:
+            raise RuntimeError(f"서버 응답 지연/오류로 저장이 반영되지 않았을 수 있음: {save_alert_error[:120]}")
+
+        # 7) 모달 닫기
+        try:
+            self.driver.switch_to.default_content()
+            self.find_and_switch_frame(selectors["cancel_button"])
+            cancel_btn = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
+            if cancel_btn and cancel_btn[0].is_displayed():
+                self.driver.execute_script("arguments[0].click();", cancel_btn[0])
+        except Exception:
+            pass
+
+        # 8) 저장 후 그리드 락 해제 및 재조회(1페이지 리셋) 완료 대기
+        self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+
     def launch_debug_chrome(self):
         base_dir = get_app_dir()
         bat_path = os.path.join(base_dir, 'chrome_debug.bat')
@@ -2387,129 +2503,93 @@ class RpaGuiApp:
                     if total_pages > 1:
                         print(f" -> [페이징] 총 {tot_rows}건 · 약 {total_pages}페이지 감지. 페이지별로 순차 저장합니다.")
 
+                    inputs_mapping = {
+                        "adult_air_input": adult_air,
+                        "adult_hotel_input": adult_hotel,
+                        "adult_land_input": adult_land,
+                        "adult_tour_input": adult_tour,
+                        "adult_profit_input": adult_profit,
+                        "child_fare_input": child_val,
+                        "infant_fare_input": infant_val
+                    }
+
+                    # 페이지별 재시도/페이싱 설정 (서버 일시 지연 408 등 대응)
+                    page_max_retries = max(1, int(self.config.get('page_max_retries', 3)))
+                    page_pause = self._float_config('erp_page_pause', 1.0, 0.0, 10.0)
+
                     target_page = 1
                     pages_done = 0
+                    pages_failed = []
 
                     while target_page <= total_pages:
                         if not self.is_running:
                             print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
                             break
 
-                        # 2페이지 이후: 저장 직후 1페이지로 리셋되므로 목표 페이지로 직접 재이동
-                        if target_page > 1:
-                            print(f" -> [페이지 이동] {target_page}/{total_pages}페이지로 재이동합니다...")
-                            self.navigate_to_grid_page(selectors, target_page, driver_timeout)
-
-                        if total_pages > 1:
-                            print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → 요금 입력 → 저장")
-
-                        header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
-                        if not header_chk.is_selected():
-                            self.driver.execute_script("arguments[0].click();", header_chk)
-                            try:
-                                WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
-                                    lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
-                                )
-                            except Exception:
-                                time.sleep(erp_short_pause)
-
-                        update_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["update_button"])
-                        self.driver.execute_script("arguments[0].click();", update_btn)
-
-                        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selectors["adult_air_input"])))
-
-                        inputs_mapping = {
-                            "adult_air_input": adult_air,
-                            "adult_hotel_input": adult_hotel,
-                            "adult_land_input": adult_land,
-                            "adult_tour_input": adult_tour,
-                            "adult_profit_input": adult_profit,
-                            "child_fare_input": child_val,
-                            "infant_fare_input": infant_val
-                        }
-                        # 금액칸은 입력 시마다 천 단위 콤마를 자동으로 다시 찍는 JS 핸들러가 있어,
-                        # send_keys로 한 글자씩 치면 콤마 삽입 순간 커서가 튀어 자릿수가 뒤섞인다.
-                        # 값을 한 번에 주입하고 이벤트만 발생시켜 포매터가 완성된 숫자에 한 번만 동작하게 한다.
-                        for key, val in inputs_mapping.items():
-                            inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
-                            self.driver.execute_script(
-                                """
-                                const el = arguments[0], v = arguments[1];
-                                el.focus();
-                                el.value = v;
-                                el.dispatchEvent(new Event('input',  {bubbles:true}));
-                                el.dispatchEvent(new Event('keyup',  {bubbles:true}));
-                                el.dispatchEvent(new Event('change', {bubbles:true}));
-                                el.dispatchEvent(new Event('blur',   {bubbles:true}));
-                                """,
-                                inp, str(val)
-                            )
-                        time.sleep(erp_short_pause)
-
-                        # 저장 전 검증: 입력칸을 다시 읽어 콤마/공백 제거 후 의도값과 대조.
-                        # 하나라도 어긋나면 자릿수 뒤섞임 등 입력 오류로 보고 저장하지 않고 실패 처리한다.
-                        def _digits_to_int(text):
-                            digits = "".join(ch for ch in str(text) if ch.isdigit())
-                            return int(digits) if digits else 0
-
-                        mismatches = []
-                        for key, val in inputs_mapping.items():
-                            inp = self.driver.find_element(By.CSS_SELECTOR, selectors[key])
-                            actual_raw = self.driver.execute_script("return arguments[0].value;", inp)
-                            if _digits_to_int(actual_raw) != _digits_to_int(val):
-                                mismatches.append(f"{key}: 기대 {_digits_to_int(val)} / 실제 '{actual_raw}'")
-
-                        if mismatches:
-                            # 모달을 닫아 다음 처리에 영향이 없게 정리한 뒤 실패 처리
-                            try:
-                                cancel_btns = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
-                                if cancel_btns:
-                                    self.driver.execute_script("arguments[0].click();", cancel_btns[0])
-                            except Exception:
-                                pass
-                            raise RuntimeError(
-                                f"입력값 검증 실패(저장 안 함, {target_page}페이지) - " + "; ".join(mismatches)
-                            )
-
-                        save_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["save_button"])
-                        self.driver.execute_script("arguments[0].click();", save_btn)
-
-                        handled = False
-                        for _ in range(3):
-                            try:
-                                alert = self.driver.switch_to.alert
-                                print(f" -> [얼럿 감지]: {alert.text}")
-                                alert.accept()
-                                handled = True
-                                time.sleep(erp_short_pause)
-                            except Exception:
+                        page_ok = False
+                        page_err = None
+                        for attempt in range(1, page_max_retries + 1):
+                            if not self.is_running:
                                 break
+                            try:
+                                # 저장하면 1페이지로 리셋되고, 재시도 시 위치가 틀어졌을 수 있으므로
+                                # 2페이지 이후 또는 재시도일 때는 목표 페이지로 직접 재이동한다.
+                                if target_page > 1 or attempt > 1:
+                                    if attempt == 1:
+                                        print(f" -> [페이지 이동] {target_page}/{total_pages}페이지로 재이동합니다...")
+                                    self.navigate_to_grid_page(selectors, target_page, driver_timeout)
 
-                        try:
-                            self.driver.switch_to.default_content()
-                            self.find_and_switch_frame(selectors["cancel_button"])
-                            cancel_btn = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
-                            if cancel_btn and cancel_btn[0].is_displayed():
-                                self.driver.execute_script("arguments[0].click();", cancel_btn[0])
-                        except Exception:
-                            pass
+                                if total_pages > 1:
+                                    suffix = f" (재시도 {attempt}/{page_max_retries})" if attempt > 1 else ""
+                                    print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → 요금 입력 → 저장{suffix}")
 
-                        # 저장 후 그리드 락 해제 및 재조회(1페이지 리셋) 완료 대기
-                        self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+                                self._save_current_page(
+                                    selectors, wait, inputs_mapping, driver_timeout,
+                                    erp_short_pause, erp_poll_interval
+                                )
+                                page_ok = True
+                                break
+                            except Exception as page_ex:
+                                page_err = str(page_ex).replace("\n", " ")
+                                print(f" -> [페이지 {target_page} 오류] {page_err[:160]}")
+                                # 떠 있을 수 있는 얼럿/모달 정리 후 재시도
+                                self._dismiss_alert_and_modal(selectors)
+                                if attempt < page_max_retries and self.is_running:
+                                    backoff = page_pause + attempt
+                                    print(f" -> [재시도 대기] {backoff:.1f}초 후 {target_page}페이지 다시 시도합니다…")
+                                    time.sleep(backoff)
 
-                        pages_done += 1
-                        if total_pages > 1:
-                            print(f" -> [저장 완료] {date_log_str} {target_page}/{total_pages}페이지")
+                        if page_ok:
+                            pages_done += 1
+                            if total_pages > 1:
+                                print(f" -> [저장 완료] {date_log_str} {target_page}/{total_pages}페이지")
+                        else:
+                            pages_failed.append(target_page)
+                            print(f" -> [페이지 실패] {date_log_str} {target_page}/{total_pages}페이지 — {page_max_retries}회 시도 모두 실패")
+
                         target_page += 1
+                        # 서버 과부하(408) 완화를 위해 페이지 사이에 짧은 텀
+                        if page_pause > 0 and self.is_running and target_page <= total_pages:
+                            time.sleep(page_pause)
 
                     if not self.is_running:
                         raise RuntimeError(f"사용자 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤")
 
-                    if total_pages > 1:
-                        print(f" -> [성공] {date_log_str} 요금 업데이트 완료 (전체 {pages_done}/{total_pages}페이지)")
+                    if pages_failed:
+                        failed_str = ', '.join(str(p) for p in pages_failed)
+                        msg = (
+                            f"{total_pages}페이지 중 {len(pages_failed)}개 페이지 저장 실패"
+                            f"(실패 페이지: {failed_str} / 성공 {pages_done}페이지). "
+                            f"서버 지연 등 일시 오류일 수 있으니 이 날짜를 다시 실행해 주세요."
+                        )
+                        print(f" -> [부분 실패] {date_log_str}: {msg}")
+                        rpa_history.append({"date": date_log_str, "status": "FAIL", "error": msg})
                     else:
-                        print(f" -> [성공] {date_log_str} 요금 업데이트 완료")
-                    rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
+                        if total_pages > 1:
+                            print(f" -> [성공] {date_log_str} 요금 업데이트 완료 (전체 {pages_done}/{total_pages}페이지)")
+                        else:
+                            print(f" -> [성공] {date_log_str} 요금 업데이트 완료")
+                        rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
 
                 except Exception as row_ex:
                     err_msg = str(row_ex).replace("\n", " ")
