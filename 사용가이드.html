@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Naeil ERP Fare Updater 사용 매뉴얼</title>
-  <meta name="description" content="내일투어 ERP 항공요금 자동 업데이트 프로그램(v2.0.3)의 상세 사용 매뉴얼 및 가이드">
+  <meta name="description" content="내일투어 ERP 항공요금 자동 업데이트 프로그램(v3.0.0)의 상세 사용 매뉴얼 및 가이드">
   
   <!-- Google Fonts: Inter & Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -621,7 +621,7 @@
   <!-- Hero Section -->
   <section class="hero">
     <div class="container">
-      <div class="hero-badge">RPA System (v2.0.3)</div>
+      <div class="hero-badge">RPA System (v3.0.0)</div>
       <h1>ERP 항공요금 일괄 업데이트 매뉴얼</h1>
       <p>엑셀 파일 연동 및 간편 셀 편집으로 내일투어 ERP 시스템에 요금을 안전하게 자동 반영하세요.</p>
     </div>
@@ -715,13 +715,19 @@
           <div class="feature-card">
             <div class="feature-title">📥 엑셀 불러오기 방식</div>
             <div class="feature-desc">
-              상단 <code>엑셀 양식 다운받기 ↗</code> 버튼을 클릭해 8컬럼 템플릿(날짜, 항공비, 호텔비, 지상비, 여행경비, 알선수익, 소아요금, 유아요금)을 다운받아 기입한 후, <code>엑셀 불러오기</code> 버튼으로 데이터만 셀에 얹어 진행합니다.
+              상단 <code>엑셀 양식 다운받기 ↗</code> 버튼을 누르면 <strong>양식 선택창</strong>이 떠서 두 가지 중 하나를 고를 수 있습니다. <strong>단일 날짜 양식</strong>은 8열(날짜, 항공비, 호텔비, 지상비, 여행경비, 알선수익, 소아요금, 유아요금)이고, <strong>기간 입력 양식</strong>은 시작일·종료일이 나뉜 9열입니다. 받은 양식에 요금을 채운 뒤 <code>엑셀 불러오기</code>로 데이터만 셀에 얹으면 되고, 불러올 때 파일이 단일인지 기간인지는 자동으로 인식해 표를 맞춰 줍니다.
             </div>
           </div>
           <div class="feature-card">
             <div class="feature-title">🔄 구버전 3열 포맷 호환</div>
             <div class="feature-desc">
               기존 v1 버전용 <strong>3개 열(날짜, 항공비, 알선수익)</strong> 형태의 엑셀도 그대로 가져올 수 있습니다. 이 경우 사용되지 않는 나머지 요금 셀(호텔비, 지상비 등)은 자동으로 <code>0</code>으로 채워져 충돌 없이 동작합니다.
+            </div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-title">🗓️ 기간 입력 모드 (시작일·종료일)</div>
+            <div class="feature-desc">
+              같은 요금이 며칠씩 이어질 때 유용합니다. 표 위쪽 <code>시작일/종료일 분리 (기간 입력)</code> 체크박스를 켜면 표가 9열로 바뀌어 <strong>시작일과 종료일</strong>을 따로 적을 수 있고, RPA가 그 구간을 한 번에 조회해 일괄 수정합니다. 체크를 풀면 다시 단일 날짜(8열) 표로 돌아갑니다.
             </div>
           </div>
         </div>
@@ -789,7 +795,9 @@
               <strong>날짜 필터 모드 선택</strong>:<br>
               - <strong>전체 대상</strong>: 그리드에 기입된 데이터 전량을 순차적으로 업데이트합니다.<br>
               - <strong>특정일 이후</strong>: 시작 날짜를 지정하여 해당 일자 포함 이후의 날짜만 골라 실행합니다.<br>
-              - <strong>특정 날짜 지정</strong>: 대입하기 원하는 개별 날짜들을 콤마(<code>,</code>)로 구분하여 기입해 처리합니다.
+              - <strong>특정 날짜 지정</strong>: 대입하기 원하는 개별 날짜들을 콤마(<code>,</code>)로 구분하여 기입해 처리합니다.<br>
+              - <strong>기간 범위 지정</strong>: 시작일과 종료일을 정해 그 사이에 걸치는 행만 골라 실행합니다.<br>
+              <em>※ 기간 입력 모드에서는 각 행의 시작일~종료일 구간이 필터 범위와 겹치기만 해도 대상에 포함됩니다.</em>
             </div>
           </li>
           <li class="step-item">
