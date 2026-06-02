@@ -1,10 +1,10 @@
 ﻿{
-    "version":  "v3.0.2",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v3.0.2/NaeilERPUpdater_Setup_v3.0.2.exe",
-    "sha256":  "F24E15A5854B92E8D3705004439016649EBEF1B0F4A1A393571466F769169E03",
+    "version":  "v3.0.3",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v3.0.3/NaeilERPUpdater_Setup_v3.0.3.exe",
+    "sha256":  "CA3207AA9E0676C08FC30AEE29D95967ACFE6D881B47A130528CBEC98664E0FF",
     "notes":  [
-                  "특정 날짜가 데이터가 있는데도 \u0027조회결과 없음\u0027으로 잘못 건너뛰던 문제를 해결했습니다.",
-                  "수정에 실패한 날짜가 있으면 작업이 끝난 뒤 팝업으로 바로 알려드립니다.",
-                  "500건이 넘는 기간도 페이지를 자동으로 넘기며 모든 행사 요금을 빠짐없이 수정합니다."
+                  "대량 저장 중 서버가 잠시 느려져도 자동으로 다시 시도해 누락을 줄입니다.",
+                  "일부 페이지가 끝내 실패하면 어느 페이지인지 알려드리니, 그 날짜만 다시 실행하면 됩니다.",
+                  "데이터가 있는데도 조회결과 없음으로 건너뛰던 문제 해결 + 실패 시 팝업 안내 포함."
               ]
 }
