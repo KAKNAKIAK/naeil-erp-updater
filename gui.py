@@ -41,7 +41,7 @@ import pandas as pd
 import excel_loader
 import update_client
 
-APP_VERSION = "v3.0.1"
+APP_VERSION = "v3.0.2"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -2335,6 +2335,22 @@ class RpaGuiApp:
                     wait = WebDriverWait(self.driver, driver_timeout, poll_frequency=erp_poll_interval)
                     norm_date = date_val.replace('-', '').replace('.', '').replace('/', '')
                     norm_date_end = date_end_val.replace('-', '').replace('.', '').replace('/', '')
+                    # 조회 완료 판정: AUIGrid 데이터 모델의 startDay(출발일)로 판정한다.
+                    # (구버전은 .aui-grid-default-column DOM 텍스트에서 날짜 형태를 모두 긁어
+                    #  범위 검사했는데, 한 행에 출발일 외 부가 날짜 컬럼이 섞여 있으면 단일일/
+                    #  좁은 기간 조회에서 그 부가 날짜가 범위를 벗어나 '조회결과 없음'으로 잘못
+                    #  건너뛰는 false negative가 있었다. 데이터 모델의 startDay만 보면 해결되고,
+                    #  행 바인딩 지연도 폴링으로 흡수된다.)
+                    grid_id = self.config.get('grid_id', '#gridMain')
+                    start_day_js = (
+                        "try {"
+                        "  var a = (typeof AUIGrid!=='undefined') ? AUIGrid.getGridData(arguments[0]) : null;"
+                        "  if (!a) return null;"
+                        "  var out = [];"
+                        "  for (var i=0;i<a.length;i++){ out.push(String(a[i].startDay==null?'':a[i].startDay)); }"
+                        "  return out;"
+                        "} catch(e){ return null; }"
+                    )
                     matched = False
                     deadline = time.time() + driver_timeout
 
@@ -2342,18 +2358,19 @@ class RpaGuiApp:
                         if not self.is_running:
                             break
 
-                        dates_seen = set()
-                        for cell in self.driver.find_elements(By.CSS_SELECTOR, selectors["date_cell_in_row"]):
-                            try:
-                                cell_txt = (cell.text or '').strip()
-                            except Exception:
-                                continue
-                            if len(cell_txt) == 10 and cell_txt[4] == '-' and cell_txt[7] == '-':
-                                dates_seen.add(cell_txt.replace('-', '').replace('.', '').replace('/', ''))
+                        try:
+                            start_days = self.driver.execute_script(start_day_js, grid_id)
+                        except Exception:
+                            start_days = None
 
-                        if dates_seen and all(norm_date <= d <= norm_date_end for d in dates_seen):
-                            matched = True
-                            break
+                        if start_days:
+                            norm_days = [
+                                str(s).replace('-', '').replace('.', '').replace('/', '')[:8]
+                                for s in start_days if s
+                            ]
+                            if norm_days and all(norm_date <= d <= norm_date_end for d in norm_days):
+                                matched = True
+                                break
                         time.sleep(erp_poll_interval)
 
                     if not matched:
@@ -2588,6 +2605,34 @@ class RpaGuiApp:
         report.append("========================================================\n")
 
         print("\n".join(report))
+
+        # 실패/스킵이 있으면 콘솔 요약으로만 끝내지 않고 팝업으로 분명히 경고한다.
+        # 요금 미수정은 매출에 직결되는 사안이라, 사용자가 결과를 놓치지 않도록 한다.
+        failed_items = [x for x in sorted_history if x["status"] != "SUCCESS"]
+        try:
+            if failed_items:
+                lines = []
+                for item in failed_items[:20]:
+                    reason = item["error"] if item.get("error") else "조회결과 없음"
+                    lines.append(f"• {item['date']}  ({reason})")
+                more = len(failed_items) - 20
+                if more > 0:
+                    lines.append(f"… 외 {more}건")
+                msg = (
+                    f"전체 {total_cnt}일 중 {fail_cnt}일이 수정되지 않았습니다.\n"
+                    f"(성공 {success_cnt}일 / 실패·스킵 {fail_cnt}일)\n\n"
+                    "아래 날짜는 요금이 반영되지 않았습니다.\n"
+                    "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.\n\n"
+                    + "\n".join(lines)
+                )
+                messagebox.showwarning(f"⚠️ 요금 수정 실패 {fail_cnt}건 — 확인 필요", msg)
+            else:
+                messagebox.showinfo(
+                    "요금 수정 완료",
+                    f"전체 {total_cnt}일을 모두 정상적으로 수정했습니다."
+                )
+        except Exception:
+            pass
 
 
 def _acquire_single_instance_lock():
