@@ -1,9 +1,11 @@
 ﻿{
-    "version":  "v2.0.4",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v2.0.4/NaeilERPUpdater_Setup_v2.0.4.exe",
-    "sha256":  "090265F75CA843F2F81654796A782B39EE490B534C3B9F8E01EFC11D8687E2D6",
+    "version":  "v3.0.0",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v3.0.0/NaeilERPUpdater_Setup_v3.0.0.exe",
+    "sha256":  "732871B4613FD7C1C766FB62F110798EB397554B7FBAAADC25F2B3C6EA2EE118",
     "notes":  [
-                  "가이드 매뉴얼 웹페이지 연동: 상단 헤더 영역에 \u0027가이드 매뉴얼 보기\u0027 바로가기 버튼 탑재",
-                  "자체 캡처한 실제 프로그램 화면을 수록한 웹 가이드 문서(HTML) 배포 및 연동"
+                  "기간 입력 모드 추가: 시작일·종료일로 같은 요금이 이어지는 구간을 한 번에 수정",
+                  "엑셀 양식 다운로드 시 단일 날짜 / 기간 입력 양식을 직접 선택",
+                  "기간 엑셀 파일 자동 인식, 날짜 필터(이후·특정·범위)를 기간 겹침 기준으로 지원",
+                  "RPA 종료일 입력 안정화: 기간 종료일이 ERP에 정확히 반영되도록 보강"
               ]
 }
