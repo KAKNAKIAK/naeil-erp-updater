@@ -711,40 +711,37 @@
           업데이트하려는 날짜와 항목별 요금 정보는 엑셀 파일을 가져오거나, 프로그램 내에 내장된 스프레드시트(셀) 그리드 편집기를 이용해 직접 작성할 수 있습니다.
         </p>
 
-        <div class="features-grid">
-          <div class="feature-card">
-            <div class="feature-title">📥 엑셀 불러오기 방식</div>
-            <div class="feature-desc">
-              상단 <code>엑셀 양식 다운받기 ↗</code> 버튼을 누르면 <strong>양식 선택창</strong>이 떠서 두 가지 중 하나를 고를 수 있습니다. <strong>단일 날짜 양식</strong>은 8열(날짜, 항공비, 호텔비, 지상비, 여행경비, 알선수익, 소아요금, 유아요금)이고, <strong>기간 입력 양식</strong>은 시작일·종료일이 나뉜 9열입니다. 받은 양식에 요금을 채운 뒤 <code>엑셀 불러오기</code>로 데이터만 셀에 얹으면 되고, 불러올 때 파일이 단일인지 기간인지는 자동으로 인식해 표를 맞춰 줍니다.
-            </div>
-          </div>
-          <div class="feature-card">
-            <div class="feature-title">🔄 구버전 3열 포맷 호환</div>
-            <div class="feature-desc">
-              기존 v1 버전용 <strong>3개 열(날짜, 항공비, 알선수익)</strong> 형태의 엑셀도 그대로 가져올 수 있습니다. 이 경우 사용되지 않는 나머지 요금 셀(호텔비, 지상비 등)은 자동으로 <code>0</code>으로 채워져 충돌 없이 동작합니다.
-            </div>
-          </div>
-          <div class="feature-card">
-            <div class="feature-title">🗓️ 기간 입력 모드 (시작일·종료일)</div>
-            <div class="feature-desc">
-              같은 요금이 며칠씩 이어질 때 유용합니다. 표 위쪽 <code>시작일/종료일 분리 (기간 입력)</code> 체크박스를 켜면 표가 9열로 바뀌어 <strong>시작일과 종료일</strong>을 따로 적을 수 있고, RPA가 그 구간을 한 번에 조회해 일괄 수정합니다. 체크를 풀면 다시 단일 날짜(8열) 표로 돌아갑니다.
-            </div>
+        <div class="feature-card">
+          <div class="feature-title">📥 엑셀 양식 다운받기 &amp; 엑셀 불러오기</div>
+          <div class="feature-desc">
+            상단 <code>엑셀 양식 다운받기 ↗</code> 버튼을 누르면 <strong>양식 선택창</strong>이 떠서 <strong>단일 날짜 양식</strong>(8열: 날짜, 항공비, 호텔비, 지상비, 여행경비, 알선수익, 소아요금, 유아요금)과 <strong>기간 입력 양식</strong>(시작일·종료일이 나뉜 9열) 중 하나를 고를 수 있습니다. 받은 양식에 요금을 채운 뒤 <code>엑셀 불러오기</code> 버튼으로 데이터를 표에 얹으면 되고, 파일이 단일인지 기간인지는 자동으로 인식해 표를 맞춰 줍니다.
           </div>
         </div>
-
         <div class="image-container">
           <img src="assets/dialog_template.png" alt="엑셀 양식 선택창">
-          <span class="image-caption">그림 2. <code>엑셀 양식 다운받기 ↗</code> 클릭 시 뜨는 양식 선택창 — 단일/기간 중 고르고 <strong>다운받기</strong>를 누릅니다.</span>
+          <span class="image-caption">그림 2. <code>엑셀 양식 다운받기 ↗</code> 클릭 시 뜨는 양식 선택창 — 단일/기간을 고르고 <code>다운받기</code>를 누릅니다.</span>
         </div>
 
+        <div class="feature-card">
+          <div class="feature-title">🗓️ 단일 날짜 입력 (기본)</div>
+          <div class="feature-desc">
+            하루(또는 날짜별)로 요금을 적는 기본 방식입니다. 입력표가 8열(날짜 + 요금 7종)로 표시됩니다. 기존 v1 버전용 <strong>3개 열(날짜, 항공비, 알선수익)</strong> 엑셀도 그대로 불러올 수 있고, 비어 있는 나머지 요금 칸은 자동으로 <code>0</code>으로 채워집니다.
+          </div>
+        </div>
         <div class="image-container">
-          <img src="assets/gui_single_v3.png" alt="단일 날짜 모드 입력표 (8열)">
-          <span class="image-caption">그림 3. 단일 날짜 모드 — 우측 입력표가 8열(날짜 + 요금 7종)로 표시됩니다.</span>
+          <img src="assets/gui_single_v3.png" alt="단일 날짜 입력 화면 (8열)">
+          <span class="image-caption">그림 3. 단일 날짜 입력 — 우측 입력표가 8열(날짜 + 요금 7종)로 표시됩니다.</span>
         </div>
 
+        <div class="feature-card">
+          <div class="feature-title">🗓️ 기간 입력 (시작일/종료일 분리)</div>
+          <div class="feature-desc">
+            같은 요금이 며칠씩 이어질 때 유용합니다. 입력표 위쪽 <code>시작일/종료일 분리 (기간 입력)</code> 체크박스를 켜면 표가 9열로 바뀌어 <strong>시작일</strong>과 <strong>종료일</strong>을 따로 적을 수 있고, RPA가 그 구간을 한 번에 조회해 일괄 수정합니다. 체크를 풀면 다시 단일 날짜(8열) 표로 돌아갑니다.
+          </div>
+        </div>
         <div class="image-container">
-          <img src="assets/gui_period_v3.png" alt="기간 입력 모드 입력표 (9열)">
-          <span class="image-caption">그림 4. 기간 입력 모드 — 우상단 <strong>시작일/종료일 분리 (기간 입력)</strong> 체크박스를 켜면 표가 9열(시작일·종료일 분리)로 바뀝니다.</span>
+          <img src="assets/gui_period_v3.png" alt="기간 입력 화면 (9열)">
+          <span class="image-caption">그림 4. 기간 입력 — <code>시작일/종료일 분리 (기간 입력)</code> 체크박스를 켜면 표가 9열(시작일·종료일 분리)로 바뀝니다.</span>
         </div>
 
         <div class="alert-box tip">
