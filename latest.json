@@ -1,7 +1,7 @@
 {
-    "version":  "v3.0.3",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v3.0.3/NaeilERPUpdater_Setup_v3.0.3.exe",
-    "sha256":  "CA3207AA9E0676C08FC30AEE29D95967ACFE6D881B47A130528CBEC98664E0FF",
+    "version":  "v4.0.0",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.0/NaeilERPUpdater_Setup_v4.0.0.exe",
+    "sha256":  "7BCE968C266CA6D75349C27394117B0FF5A0D0D416AEE74733563947B2878914",
     "notes":  [
                   "요금수정과 토파스조회 탭을 분리했습니다.",
                   "TOPAS 첫 조회 후 AC1을 10개씩 묶어 자동 조회하고, 전체 원문 결과를 복사 가능한 팝업으로 제공합니다.",
