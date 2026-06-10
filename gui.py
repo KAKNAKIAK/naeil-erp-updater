@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Naeil Tour ERP 요금 업데이트 RPA — v2.0 테스트 버전 (gui_v2.py)
+Naeil Tour ERP 요금 업데이트 RPA — v4.0.0
 
-v1.x(gui.py)와의 차이:
-  - 엑셀 파일 업로드 대신, 앱에 내장된 스프레드시트(셀) 그리드에 직접 입력/수정.
+주요 기능:
+  - 앱에 내장된 스프레드시트(셀) 그리드에 요금 직접 입력/수정.
   - 엑셀에서 복사한 표를 셀에 그대로 붙여넣기(Ctrl+V) 가능.
-  - 기존 엑셀 파일은 '엑셀 불러오기' 버튼으로 그리드에 가져오기만 함(선택).
-  - 검증된 RPA 루프(rpa_worker_loop)와 ERP 셀렉터/설정(config.json)은 그대로 재사용.
-
-원본 gui.py는 보존하며, 이 파일은 테스트용으로 분리되어 있다.
-빌드/배포 대상이 아니다.
+  - 기존 엑셀 파일은 '요금불러오기' 버튼으로 그리드에 가져오기 가능.
+  - ERP 요금수정 탭과 TOPAS AC1 연속 조회 탭을 분리.
 """
 import os
 import sys
@@ -29,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -40,8 +38,9 @@ from tksheet import Sheet
 import pandas as pd
 import excel_loader
 import update_client
+from topas.availability import parse_availability_text
 
-APP_VERSION = "v3.0.3"
+APP_VERSION = "v4.0.0"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -216,6 +215,10 @@ class GUIConsoleRedirector:
 class RpaGuiApp:
     FARE_SITE_URL = 'https://fare-calculator-2026.web.app/'
     GUIDE_SITE_URL = 'https://kaknakiak.github.io/naeil-erp-updater/사용가이드.html'
+    ERP_LOGIN_URL = 'https://erp.naeiltour.co.kr/erp/login'
+    TOPAS_LOGIN_URL = 'https://www.topassellconnect.com/login'
+    TOPAS_PROMPT_INPUT = '#cryptics1_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput'
+    TOPAS_SHELL_ROOT = '#cryptics1_cmd_shellbridge_shellWindow_top_left'
 
     def __init__(self, root):
         self.root = root
@@ -258,6 +261,13 @@ class RpaGuiApp:
         self.driver = None
         self.console_redirector = None
         self.toolbar_buttons = []
+        self.topas_thread = None
+        self.topas_results_raw = []
+        self.topas_stop_requested = False
+        self._topas_shell_el = None
+        self._topas_prompt_el = None
+        self.current_main_tab = 'fare'
+        self.main_tab_controls = {}
 
         # 수식 입력줄(formula bar) / 클릭 참조 상태
         self.fb_var = tk.StringVar()
@@ -287,7 +297,7 @@ class RpaGuiApp:
         self._on_filter_mode_change()
         self._load_loading_frames()
         self.refresh_count()
-        self.set_status("오른쪽 위 ‘직접 입력 하기 ▶’ 버튼으로 요금을 입력하세요", self.fg_muted)
+        self.set_status("오른쪽 위 ‘요금직접입력하기 ▶’ 버튼으로 요금을 입력하세요", self.fg_muted)
         self.root.after(800, self.check_for_updates_on_startup)
 
     # ------------------------------------------------------------------
@@ -327,12 +337,17 @@ class RpaGuiApp:
             'history_log_path': 'logs/update_history.csv',
             'screenshot_dir': 'logs/screenshots',
             'update_enabled': True,
-            'update_latest_url': 'https://raw.githubusercontent.com/KAKNAKIAK/naeil-erp-updater/main/latest.json',
+            'update_latest_url': 'https://api.github.com/repos/KAKNAKIAK/naeil-erp-updater/contents/latest.json?ref=main',
             'update_check_timeout': 8,
             'update_download_timeout': 30,
             'erp_poll_interval': 0.25,
             'erp_short_pause': 0.2,
             'erp_grid_ready_stable_seconds': 1.0,
+            'topas_poll_interval': 0.04,
+            'topas_response_stable_wait': 0.2,
+            'topas_batch_timeout': 120,
+            'topas_parse_tail_chars': 80000,
+            'topas_batch_size': 10,
             'selectors': default_selectors
         }
         if not os.path.exists(config_path):
@@ -371,6 +386,17 @@ class RpaGuiApp:
             value = max(float(min_value), value)
         if max_value is not None:
             value = min(float(max_value), value)
+        return value
+
+    def _int_config(self, key, default, min_value=None, max_value=None):
+        try:
+            value = int(self.config.get(key, default))
+        except (TypeError, ValueError):
+            value = int(default)
+        if min_value is not None:
+            value = max(int(min_value), value)
+        if max_value is not None:
+            value = min(int(max_value), value)
         return value
 
     def check_for_updates_on_startup(self):
@@ -674,7 +700,7 @@ class RpaGuiApp:
         header_frame.pack(fill=tk.X, padx=24)
 
         self.chrome_launch_btn = tk.Button(
-            header_frame, text='ERP 켜기', width=14, height=2,
+            header_frame, text='브라우저 켜기', width=14, height=2,
             bg=self.accent_color, fg='white', font=('맑은 고딕', 10, 'bold'),
             activebackground=self.accent_hover, activeforeground='white',
             bd=0, relief=tk.FLAT, cursor='hand2', command=self.launch_debug_chrome)
@@ -719,6 +745,12 @@ class RpaGuiApp:
             command=self.download_excel_template)
         template_btn.pack(anchor=tk.W, pady=(6, 0))
         self._add_hover(template_btn, self.card_color, self.accent_orange, normal_fg=self.accent_orange, hover_fg='white')
+
+        self._build_main_tab_bar(main_col)
+        self.main_content = tk.Frame(main_col, bg=self.bg_color)
+        self.main_content.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 0))
+        self.fare_tab = tk.Frame(self.main_content, bg=self.bg_color)
+        self.topas_tab = tk.Frame(self.main_content, bg=self.bg_color)
 
         # 2. 요금 입력표 카드 (셀 그리드) — 오른쪽 펼침 패널 안에 배치
         sheet_card = tk.LabelFrame(self.side_panel, text=' 요금 입력표 ', font=('맑은 고딕', 9, 'bold'), bg=self.card_color, fg=self.fg_muted, bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightthickness=1, padx=10, pady=8)
@@ -816,13 +848,13 @@ class RpaGuiApp:
             print(f'[안내] 인셀 클릭 참조 비활성화: {e}')
         self._load_active_into_fb()
 
-        # 2-1. 기능 버튼 줄: 엑셀 불러오기 + 직접 입력 하기
-        action_row = tk.Frame(main_col, bg=self.bg_color)
-        action_row.pack(fill=tk.X, padx=24, pady=(0, 8))
-        self._make_toolbar_btn(action_row, '엑셀 불러오기', self.accent_color, self.accent_hover, self.import_excel_to_sheet)
+        # 2-1. 기능 버튼 줄: 요금불러오기 + 요금직접입력하기
+        action_row = tk.Frame(self.fare_tab, bg=self.bg_color)
+        action_row.pack(fill=tk.X, padx=6, pady=(10, 8))
+        self._make_toolbar_btn(action_row, '요금불러오기', self.accent_color, self.accent_hover, self.import_excel_to_sheet)
 
         self.toggle_btn = tk.Button(
-            action_row, text='직접 입력 하기 ▶',
+            action_row, text='요금직접입력하기 ▶',
             bg=self.accent_green, fg='white', font=('맑은 고딕', 9, 'bold'),
             activebackground=self.accent_green_hover, activeforeground='white',
             bd=0, relief=tk.FLAT, cursor='hand2', padx=10, pady=4, command=self.toggle_sheet_panel)
@@ -831,8 +863,8 @@ class RpaGuiApp:
 
 
         # 3. 날짜 필터 카드
-        filter_card = tk.LabelFrame(main_col, text=' 날짜 필터 (선택) ', font=('맑은 고딕', 9, 'bold'), bg=self.card_color, fg=self.fg_muted, bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightthickness=1, padx=10, pady=6)
-        filter_card.pack(fill=tk.X, padx=24, pady=(0, 8))
+        filter_card = tk.LabelFrame(self.fare_tab, text=' 날짜 필터 (선택) ', font=('맑은 고딕', 9, 'bold'), bg=self.card_color, fg=self.fg_muted, bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightthickness=1, padx=10, pady=6)
+        filter_card.pack(fill=tk.X, padx=6, pady=(0, 8))
 
         filter_modes_frame = tk.Frame(filter_card, bg=self.card_color)
         filter_modes_frame.grid(row=0, column=0, padx=6, pady=4, sticky=tk.W)
@@ -846,8 +878,8 @@ class RpaGuiApp:
         self.filter_tip_lbl.grid(row=1, column=1, padx=(10, 0), sticky=tk.W)
 
         # 4. 진행 상태 바
-        progress_frame = tk.Frame(main_col, bg=self.bg_color)
-        progress_frame.pack(fill=tk.X, padx=24, pady=(2, 4))
+        progress_frame = tk.Frame(self.fare_tab, bg=self.bg_color)
+        progress_frame.pack(fill=tk.X, padx=6, pady=(2, 4))
 
         self.status_dot = tk.Label(progress_frame, text='●', font=('맑은 고딕', 11), bg=self.bg_color, fg=self.fg_muted)
         self.status_dot.pack(side=tk.LEFT, padx=(0, 6))
@@ -857,21 +889,21 @@ class RpaGuiApp:
         self.progress_lbl = tk.Label(progress_frame, text='0 / 0 (0%)', font=('맑은 고딕', 9), bg=self.bg_color, fg=self.fg_muted)
         self.progress_lbl.pack(side=tk.RIGHT)
 
-        self.progress_bar = ttk.Progressbar(main_col, orient='horizontal', mode='determinate', style='Accent.Horizontal.TProgressbar')
-        self.progress_bar.pack(fill=tk.X, padx=24, pady=(0, 10))
+        self.progress_bar = ttk.Progressbar(self.fare_tab, orient='horizontal', mode='determinate', style='Accent.Horizontal.TProgressbar')
+        self.progress_bar.pack(fill=tk.X, padx=6, pady=(0, 10))
 
         # 5. 로그 영역
-        log_title = tk.Label(main_col, text='실시간 작업 내용', font=('맑은 고딕', 9, 'bold'), bg=self.bg_color, fg=self.fg_muted)
-        log_title.pack(anchor=tk.W, padx=24, pady=(0, 3))
+        log_title = tk.Label(self.fare_tab, text='실시간 작업 내용', font=('맑은 고딕', 9, 'bold'), bg=self.bg_color, fg=self.fg_muted)
+        log_title.pack(anchor=tk.W, padx=6, pady=(0, 3))
 
-        log_wrap = tk.Frame(main_col, bg=self.border_color, bd=0)
-        log_wrap.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 10))
+        log_wrap = tk.Frame(self.fare_tab, bg=self.border_color, bd=0)
+        log_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 10))
         self.log_txt = ScrolledText(log_wrap, height=8, bg='#0c0d11', fg='#c9cdd6', insertbackground='white', font=('Consolas', 9), bd=0, relief=tk.FLAT, padx=10, pady=8)
         self.log_txt.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
         # 6. 컨트롤 버튼
-        control_frame = tk.Frame(main_col, bg=self.bg_color)
-        control_frame.pack(fill=tk.X, padx=24, pady=(2, 14))
+        control_frame = tk.Frame(self.fare_tab, bg=self.bg_color)
+        control_frame.pack(fill=tk.X, padx=6, pady=(2, 14))
 
         self.start_btn = tk.Button(control_frame, text='▶  요금수정 시작', width=18, height=2, bg=self.accent_green, fg='white', font=('맑은 고딕', 10, 'bold'), activebackground=self.accent_green_hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', command=self.start_rpa)
         self.start_btn.pack(side=tk.LEFT)
@@ -887,6 +919,83 @@ class RpaGuiApp:
         self.stop_btn.config(state=tk.DISABLED)
         self._add_hover(self.stop_btn, self.accent_red, self.accent_red_hover)
 
+        self._build_topas_tab()
+        self._select_main_tab('fare')
+
+    def _build_main_tab_bar(self, parent):
+        tab_outer = tk.Frame(parent, bg=self.bg_color)
+        tab_outer.pack(fill=tk.X, padx=18, pady=(0, 8))
+
+        tab_shell = tk.Frame(
+            tab_outer,
+            bg=self.card_color,
+            highlightbackground=self.border_color,
+            highlightthickness=1,
+        )
+        tab_shell.pack(anchor=tk.W)
+
+        self.main_tab_controls = {}
+        for key, label in [('fare', '요금수정'), ('topas', '토파스조회')]:
+            slot = tk.Frame(tab_shell, bg=self.card_color)
+            slot.pack(side=tk.LEFT)
+            btn = tk.Button(
+                slot,
+                text=label,
+                bg=self.card_color,
+                fg=self.fg_muted,
+                activebackground=self.card_hover,
+                activeforeground=self.fg_color,
+                font=('맑은 고딕', 10, 'bold'),
+                bd=0,
+                relief=tk.FLAT,
+                cursor='hand2',
+                padx=22,
+                pady=8,
+                command=lambda tab_key=key: self._select_main_tab(tab_key),
+            )
+            btn.pack(fill=tk.X)
+            underline = tk.Frame(slot, bg=self.card_color, height=2)
+            underline.pack(fill=tk.X, padx=12)
+            self.main_tab_controls[key] = (btn, underline, slot)
+            btn.bind('<Enter>', lambda _e, tab_key=key: self._hover_main_tab(tab_key, True))
+            btn.bind('<Leave>', lambda _e, tab_key=key: self._hover_main_tab(tab_key, False))
+
+    def _hover_main_tab(self, tab_key, entering):
+        if tab_key == self.current_main_tab or tab_key not in self.main_tab_controls:
+            return
+        btn, _underline, _slot = self.main_tab_controls[tab_key]
+        btn.config(
+            bg=self.card_hover if entering else self.card_color,
+            fg=self.fg_color if entering else self.fg_muted,
+        )
+
+    def _select_main_tab(self, tab_key):
+        if tab_key == 'topas':
+            self._collapse_sheet_panel()
+
+        self.current_main_tab = tab_key
+
+        if hasattr(self, 'fare_tab') and hasattr(self, 'topas_tab'):
+            self.fare_tab.pack_forget()
+            self.topas_tab.pack_forget()
+            target = self.topas_tab if tab_key == 'topas' else self.fare_tab
+            target.pack(fill=tk.BOTH, expand=True)
+
+        selected_bg = '#1b1f29'
+        for key, controls in self.main_tab_controls.items():
+            btn, underline, slot = controls
+            selected = key == tab_key
+            bg = selected_bg if selected else self.card_color
+            fg = 'white' if selected else self.fg_muted
+            btn.config(
+                bg=bg,
+                fg=fg,
+                activebackground=bg if selected else self.card_hover,
+                activeforeground='white' if selected else self.fg_color,
+            )
+            slot.config(bg=bg)
+            underline.config(bg=self.accent_color if selected else self.card_color)
+
     def _make_toolbar_btn(self, parent, text, bg, hover, command):
         btn = tk.Button(parent, text=text, bg=bg, fg='white', font=('맑은 고딕', 9, 'bold'), activebackground=hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', padx=10, pady=4, command=command)
         btn.pack(side=tk.LEFT, padx=(0, 6))
@@ -894,18 +1003,150 @@ class RpaGuiApp:
         self.toolbar_buttons.append(btn)
         return btn
 
+    def _build_topas_tab(self):
+        topas_card = tk.LabelFrame(
+            self.topas_tab,
+            text=' TOPAS 조회 ',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_muted,
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightthickness=1,
+            padx=14,
+            pady=12,
+        )
+        topas_card.pack(fill=tk.X, padx=6, pady=(10, 10))
+
+        tk.Label(
+            topas_card,
+            text='TOPAS 화면에서 첫 날짜 조회를 먼저 실행한 뒤 시작하세요.',
+            font=('맑은 고딕', 10, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_color,
+        ).pack(anchor=tk.W)
+
+        tk.Label(
+            topas_card,
+            text='조회 시작 후 현재 Entry 화면의 마지막 조회 원문부터 보관하고, 입력한 횟수만큼 AC1을 실행합니다.',
+            font=('맑은 고딕', 9),
+            bg=self.card_color,
+            fg=self.fg_muted,
+        ).pack(anchor=tk.W, pady=(4, 10))
+
+        topas_actions = tk.Frame(topas_card, bg=self.card_color)
+        topas_actions.pack(fill=tk.X)
+
+        self.topas_query_btn = tk.Button(
+            topas_actions,
+            text='토파스 조회하기',
+            width=18,
+            height=2,
+            bg=self.accent_green,
+            fg='white',
+            font=('맑은 고딕', 10, 'bold'),
+            activebackground=self.accent_green_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=self.prompt_topas_query_count,
+        )
+        self.topas_query_btn.pack(side=tk.LEFT)
+        self._add_hover(self.topas_query_btn, self.accent_green, self.accent_green_hover)
+
+        self.topas_stop_btn = tk.Button(
+            topas_actions,
+            text='■  중지',
+            width=13,
+            height=2,
+            bg=self.accent_red,
+            fg='white',
+            font=('맑은 고딕', 10, 'bold'),
+            activebackground=self.accent_red_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=self.stop_topas_query,
+        )
+        self.topas_stop_btn.pack(side=tk.RIGHT)
+        self.topas_stop_btn.config(state=tk.DISABLED)
+        self._add_hover(self.topas_stop_btn, self.accent_red, self.accent_red_hover)
+
+        topas_progress_frame = tk.Frame(self.topas_tab, bg=self.bg_color)
+        topas_progress_frame.pack(fill=tk.X, padx=6, pady=(2, 4))
+
+        self.topas_status_lbl = tk.Label(
+            topas_progress_frame,
+            text='대기 중',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        )
+        self.topas_status_lbl.pack(side=tk.LEFT)
+
+        self.topas_progress_lbl = tk.Label(
+            topas_progress_frame,
+            text='0 / 0 (0%)',
+            font=('맑은 고딕', 9),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        )
+        self.topas_progress_lbl.pack(side=tk.RIGHT)
+
+        self.topas_progress_bar = ttk.Progressbar(
+            self.topas_tab,
+            orient='horizontal',
+            mode='determinate',
+            style='Accent.Horizontal.TProgressbar',
+        )
+        self.topas_progress_bar.pack(fill=tk.X, padx=6, pady=(0, 10))
+
+        topas_log_title = tk.Label(
+            self.topas_tab,
+            text='토파스 조회 작업 내용',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        )
+        topas_log_title.pack(anchor=tk.W, padx=6, pady=(0, 3))
+
+        topas_log_wrap = tk.Frame(self.topas_tab, bg=self.border_color, bd=0)
+        topas_log_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 10))
+        self.topas_log_txt = ScrolledText(
+            topas_log_wrap,
+            height=8,
+            bg='#0c0d11',
+            fg='#c9cdd6',
+            insertbackground='white',
+            font=('Consolas', 9),
+            bd=0,
+            relief=tk.FLAT,
+            padx=10,
+            pady=8,
+        )
+        self.topas_log_txt.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
     def toggle_sheet_panel(self):
         """오른쪽 '요금 입력표' 패널을 펼치거나 접고, 창 너비를 함께 조절한다."""
         if self.panel_expanded:
-            self.side_panel.pack_forget()
-            self.panel_expanded = False
-            self.toggle_btn.config(text='직접 입력 하기 ▶')
-            self.root.geometry(f'{self.collapsed_width}x{self.win_height}')
+            self._collapse_sheet_panel()
         else:
             self.side_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 16), pady=16)
             self.panel_expanded = True
             self.toggle_btn.config(text='◀ 입력표 접기')
             self.root.geometry(f'{self.expanded_width}x{self.win_height}')
+
+    def _collapse_sheet_panel(self):
+        if not self.panel_expanded:
+            return
+        self.side_panel.pack_forget()
+        self.panel_expanded = False
+        if hasattr(self, 'toggle_btn'):
+            self.toggle_btn.config(text='요금직접입력하기 ▶')
+        self.root.geometry(f'{self.collapsed_width}x{self.win_height}')
 
     def get_fare_cols(self):
         is_period = self.period_mode_var.get()
@@ -1481,10 +1722,10 @@ class RpaGuiApp:
         try:
             data_res = excel_loader.load_and_validate_fares(path)
         except Exception as e:
-            messagebox.showerror('엑셀 불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{e}')
+            messagebox.showerror('요금불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{e}')
             return
         if not data_res or not data_res[0]:
-            messagebox.showwarning('엑셀 불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.')
+            messagebox.showwarning('요금불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.')
             return
             
         data, is_period = data_res
@@ -1919,6 +2160,9 @@ class RpaGuiApp:
     # RPA 실행 제어
     # ------------------------------------------------------------------
     def start_rpa(self):
+        if self.is_running:
+            messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
+            return
         rows, errors = self.read_sheet_data()
         if errors:
             preview = "\n".join(errors[:10])
@@ -2003,6 +2247,651 @@ class RpaGuiApp:
             self.generate_and_show_report(history)
         finally:
             self.clean_up_ui_after_rpa()
+
+    def _get_debug_browser_target(self):
+        if getattr(self, 'current_main_tab', 'fare') == 'topas':
+            return self.TOPAS_LOGIN_URL, 'TOPAS'
+        return self.ERP_LOGIN_URL, 'ERP'
+
+    # ------------------------------------------------------------------
+    # TOPAS 조회 제어
+    # ------------------------------------------------------------------
+    def prompt_topas_query_count(self):
+        if self.is_running:
+            messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title('토파스 조회 횟수')
+        dialog.configure(bg=self.bg_color)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        box = tk.Frame(dialog, bg=self.bg_color, padx=18, pady=16)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            box,
+            text='AC1 실행 횟수',
+            font=('맑은 고딕', 11, 'bold'),
+            bg=self.bg_color,
+            fg=self.fg_color,
+        ).pack(anchor=tk.W)
+        tk.Label(
+            box,
+            text='첫 조회는 TOPAS 화면에서 직접 실행한 상태여야 합니다.',
+            font=('맑은 고딕', 9),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        ).pack(anchor=tk.W, pady=(4, 10))
+
+        count_var = tk.StringVar(value='')
+        count_entry = tk.Entry(
+            box,
+            textvariable=count_var,
+            width=18,
+            bg='#0c0d11',
+            fg=self.fg_color,
+            insertbackground='white',
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            highlightthickness=1,
+            font=('Consolas', 13),
+        )
+        count_entry.pack(anchor=tk.W, ipady=5)
+
+        tk.Label(
+            box,
+            text='예: 200 입력 시 AC1을 200번 실행합니다.',
+            font=('맑은 고딕', 8),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        ).pack(anchor=tk.W, pady=(6, 14))
+
+        tk.Label(
+            box,
+            text='AC1은 10개씩 묶어 전송하고, 10개 응답이 모두 확인된 뒤 다음 묶음을 전송합니다.',
+            font=('맑은 고딕', 8),
+            bg=self.bg_color,
+            fg=self.fg_muted,
+        ).pack(anchor=tk.W, pady=(6, 14))
+
+        buttons = tk.Frame(box, bg=self.bg_color)
+        buttons.pack(fill=tk.X)
+
+        def run_from_dialog(_event=None):
+            raw = count_var.get().strip()
+            try:
+                count = int(raw)
+            except ValueError:
+                messagebox.showwarning('입력 확인', '조회 횟수는 숫자로 입력해 주세요.', parent=dialog)
+                return
+            if count <= 0:
+                messagebox.showwarning('입력 확인', '조회 횟수는 1 이상이어야 합니다.', parent=dialog)
+                return
+            dialog.grab_release()
+            dialog.destroy()
+            batch_size = self._int_config('topas_batch_size', 10, 10, 10)
+            self.start_topas_query(count, batch_size)
+
+        run_btn = tk.Button(
+            buttons,
+            text='실행',
+            width=10,
+            bg=self.accent_green,
+            fg='white',
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.accent_green_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=run_from_dialog,
+        )
+        run_btn.pack(side=tk.LEFT)
+        self._add_hover(run_btn, self.accent_green, self.accent_green_hover)
+
+        cancel_btn = tk.Button(
+            buttons,
+            text='취소',
+            width=10,
+            bg=self.card_hover,
+            fg='white',
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.border_color,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=lambda: (dialog.grab_release(), dialog.destroy()),
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._add_hover(cancel_btn, self.card_hover, self.border_color)
+
+        dialog.bind('<Return>', run_from_dialog)
+        count_entry.focus_set()
+        self.root.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - 320) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - 180) // 2)
+        dialog.geometry(f'+{x}+{y}')
+
+    def start_topas_query(self, count, batch_size=1):
+        if self.is_running:
+            messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
+            return
+
+        self.is_running = True
+        self.topas_stop_requested = False
+        self.topas_results_raw = []
+        self._topas_reset_element_cache()
+
+        self.topas_query_btn.config(state=tk.DISABLED)
+        self.topas_stop_btn.config(state=tk.NORMAL)
+        self.start_btn.config(state=tk.DISABLED)
+        self.pause_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.DISABLED)
+        self._set_inputs_locked(True)
+
+        self.topas_progress_bar['maximum'] = count
+        self.topas_progress_bar['value'] = 0
+        self.topas_progress_lbl.config(text=f'0 / {count} (0%)')
+        self._set_topas_status('TOPAS 연결 준비 중', self.accent_orange)
+        self.topas_log_txt.delete('1.0', tk.END)
+        if batch_size > 1:
+            self._append_topas_log(f'[묶음 전송] AC1을 {batch_size}건씩 전송합니다.\n')
+
+        self.topas_thread = threading.Thread(target=self.topas_worker_loop, args=(count, batch_size), daemon=True)
+        self.topas_thread.start()
+
+    def stop_topas_query(self):
+        if self.is_running:
+            self.topas_stop_requested = True
+            self.topas_stop_btn.config(state=tk.DISABLED, text='중지 중...')
+            self._set_topas_status('중지 요청됨 · 현재 조회 완료 후 정리', self.accent_red)
+            self._append_topas_log('[중지 요청] 현재 AC1 응답을 받은 뒤 멈춥니다.\n')
+
+    def topas_worker_loop(self, count, batch_size=1):
+        driver = None
+        results = []
+        error_message = None
+        stopped = False
+        started = time.perf_counter()
+        batch_size = max(1, int(batch_size or 1))
+
+        try:
+            self.root.after(0, lambda: self._append_topas_log('[TOPAS] 디버그 브라우저 연결 중...\n'))
+            options = webdriver.ChromeOptions()
+            debug_addr = self.config.get("debugger_address", self.config.get("debuggerAddress", "127.0.0.1:9222"))
+            options.add_experimental_option("debuggerAddress", debug_addr)
+            driver = webdriver.Chrome(options=options)
+            self.driver = driver
+            self._topas_reset_element_cache()
+
+            first_block = self._topas_get_latest_block(driver)
+            if first_block is None:
+                if not self._topas_has_entry_shell(driver):
+                    location = self._topas_debug_location(driver)
+                    raise RuntimeError(
+                        '디버그 브라우저(127.0.0.1:9222)에서 TOPAS Entry 화면을 찾지 못했습니다.\n'
+                        'TOPAS 조회 탭에서 [브라우저 켜기]로 TOPAS를 연 뒤 로그인하고 첫 날짜 조회까지 실행해 주세요.\n'
+                        f'현재 연결된 브라우저: {location}'
+                    )
+                excerpt = self._topas_shell_excerpt(driver)
+                raise RuntimeError(
+                    'TOPAS Entry 화면은 찾았지만 조회 결과 원문을 파싱하지 못했습니다.\n'
+                    f'화면 원문 일부: {excerpt}'
+                )
+
+            results.append(first_block.raw_text)
+            previous_block = first_block
+            first_desc = first_block.request_command or '현재 조회'
+            self.root.after(0, lambda desc=first_desc: self._append_topas_log(f'[초기 조회 보관] {desc}\n'))
+            self.root.after(0, lambda: self._set_topas_status('AC1 조회 중', self.accent_green))
+
+            done = 0
+            while done < count:
+                if self.topas_stop_requested or not self.is_running:
+                    stopped = True
+                    break
+
+                chunk_size = min(batch_size, count - done)
+                step_started = time.perf_counter()
+                self._topas_send_ac1_batch(driver, chunk_size)
+                blocks = self._topas_wait_next_blocks(driver, previous_block, chunk_size)
+                chunk_elapsed = time.perf_counter() - step_started
+                if not blocks:
+                    raise TimeoutError('TOPAS가 AC1 묶음에 대한 새 응답을 반환하지 않았습니다.')
+
+                for block in blocks:
+                    done += 1
+                    results.append(block.raw_text)
+                    previous_block = block
+
+                    request = block.request_command or f'AC1 #{done}'
+                    pct = int(done / count * 100)
+                    elapsed_per_item = chunk_elapsed / max(1, len(blocks))
+                    self.root.after(
+                        0,
+                        lambda i=done, c=count, p=pct, req=request, sec=elapsed_per_item: self._topas_progress_update(
+                            i, c, p, req, sec
+                        ),
+                    )
+
+            self.topas_results_raw = results
+        except Exception as exc:
+            error_message = str(exc)
+            self.root.after(0, lambda msg=error_message: self._append_topas_log(f'[오류] {msg}\n'))
+        finally:
+            total_elapsed = time.perf_counter() - started
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            self.driver = None
+            self._topas_reset_element_cache()
+            self.root.after(
+                0,
+                lambda res=list(results), err=error_message, stop=stopped, sec=total_elapsed: self.finish_topas_query_on_ui(
+                    res, err, stop, sec
+                ),
+            )
+
+    def _topas_send_ac1(self, driver):
+        self._topas_send_ac1_batch(driver, 1)
+
+    def _topas_send_ac1_batch(self, driver, count):
+        prompt = self._topas_find_prompt_input(driver)
+        if prompt is None:
+            raise RuntimeError('TOPAS 명령 입력창을 찾지 못했습니다. Entry 화면이 열려 있는지 확인해 주세요.')
+        try:
+            driver.execute_script('arguments[0].focus(); arguments[0].value = "";', prompt)
+            keys = []
+            for _ in range(max(1, int(count))):
+                keys.extend(('AC1', Keys.ENTER))
+            prompt.send_keys(*keys)
+        except Exception:
+            self._topas_prompt_el = None
+            prompt = self._topas_find_prompt_input(driver)
+            if prompt is None:
+                raise
+            driver.execute_script('arguments[0].focus(); arguments[0].value = "";', prompt)
+            keys = []
+            for _ in range(max(1, int(count))):
+                keys.extend(('AC1', Keys.ENTER))
+            prompt.send_keys(*keys)
+
+    def _topas_wait_next_block(self, driver, previous_block, timeout=None):
+        return self._topas_wait_next_blocks(driver, previous_block, 1, timeout=timeout)[0]
+
+    def _topas_wait_next_blocks(self, driver, previous_block, expected_count, timeout=None):
+        if timeout is None:
+            timeout = self._float_config('topas_batch_timeout', 120, 10, 300)
+        deadline = time.perf_counter() + timeout
+        last_request = None
+        last_loaded_count = 0
+        candidate_signature = None
+        candidate_blocks = []
+        candidate_seen_at = None
+        stable_wait = self._float_config('topas_response_stable_wait', 0.2, 0.05, 2.0)
+        poll_interval = self._float_config('topas_poll_interval', 0.04, 0.02, 0.2)
+        expected_count = max(1, int(expected_count))
+
+        while time.perf_counter() < deadline:
+            blocks = self._topas_get_blocks_after(driver, previous_block)
+            if blocks:
+                last_request = blocks[-1].request_command
+            new_blocks = self._topas_collect_new_response_blocks(blocks, previous_block)
+            last_loaded_count = max(last_loaded_count, len(new_blocks))
+            if len(new_blocks) >= expected_count:
+                candidate = new_blocks[:expected_count]
+                signature = tuple((self._topas_block_key(block), block.raw_text) for block in candidate)
+                if signature != candidate_signature:
+                    candidate_signature = signature
+                    candidate_blocks = candidate
+                    candidate_seen_at = time.perf_counter()
+                elif candidate_seen_at is not None and self._topas_prompt_is_idle(driver):
+                    stable_for = time.perf_counter() - candidate_seen_at
+                    if stable_for >= stable_wait and len(candidate_blocks) >= expected_count:
+                        return candidate_blocks
+            time.sleep(poll_interval)
+        raise TimeoutError(
+            f'TOPAS 묶음 응답 대기 {int(timeout)}초 초과: '
+            f'{expected_count}개 중 {last_loaded_count}개만 확인했습니다. '
+            f'마지막 응답: {last_request or "없음"}'
+        )
+
+    def _topas_collect_new_response_blocks(self, blocks, previous_block):
+        collected = []
+        seen = set()
+        for block in blocks:
+            if not self._topas_is_response_block(block):
+                continue
+            key = self._topas_block_key(block)
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(block)
+        return collected
+
+    def _topas_is_new_response_block(self, block, previous_block):
+        return self._topas_is_response_block(block) and block.raw_text != previous_block.raw_text
+
+    def _topas_is_response_block(self, block):
+        if not block.request_command:
+            return False
+
+        raw_upper = block.raw_text.upper()
+        has_response_marker = (
+            'AMADEUS AVAILABILITY' in raw_upper
+            or 'NO FLIGHT' in raw_upper
+            or 'REQUEST NEW AVAILABILITY' in raw_upper
+        )
+        return has_response_marker
+
+    def _topas_block_key(self, block):
+        return (
+            block.request_command or '',
+            block.offset_days,
+            block.travel_date.isoformat() if block.travel_date else '',
+        )
+
+    def _topas_get_latest_block(self, driver):
+        blocks = self._topas_get_recent_blocks(driver)
+        return blocks[-1] if blocks else None
+
+    def _topas_get_recent_blocks(self, driver):
+        shell = self._topas_find_entry_shell(driver)
+        if shell is None:
+            return []
+        text = self._topas_shell_text(driver, shell)
+        tail_chars = self._int_config('topas_parse_tail_chars', 80000, 4000, 300000)
+        if len(text) > tail_chars:
+            text = text[-tail_chars:]
+        blocks = parse_availability_text(text, year_hint=datetime.now().year)
+        return blocks
+
+    def _topas_get_blocks_after(self, driver, previous_block):
+        shell = self._topas_find_entry_shell(driver)
+        if shell is None:
+            return []
+        text = self._topas_shell_text(driver, shell)
+        segment = self._topas_text_after_previous_block(text, previous_block)
+        blocks = parse_availability_text(segment, year_hint=datetime.now().year)
+        return blocks
+
+    def _topas_text_after_previous_block(self, text, previous_block):
+        if not text:
+            return ''
+
+        raw = (previous_block.raw_text or '').strip()
+        if raw:
+            idx = text.rfind(raw)
+            if idx >= 0:
+                return text[idx + len(raw):]
+
+        request = (previous_block.request_command or '').strip()
+        if request:
+            idx = text.rfind(request)
+            if idx >= 0:
+                next_prompt = text.find('\n>', idx)
+                if next_prompt >= 0:
+                    return text[next_prompt + 1:]
+                return text[idx + len(request):]
+
+        tail_chars = self._int_config('topas_parse_tail_chars', 80000, 4000, 300000)
+        return text[-tail_chars:]
+
+    def _topas_find_entry_shell(self, driver):
+        return self._topas_get_cached_element(driver, '_topas_shell_el', self.TOPAS_SHELL_ROOT)
+
+    def _topas_find_prompt_input(self, driver):
+        return self._topas_get_cached_element(driver, '_topas_prompt_el', self.TOPAS_PROMPT_INPUT)
+
+    def _topas_reset_element_cache(self):
+        self._topas_shell_el = None
+        self._topas_prompt_el = None
+
+    def _topas_get_cached_element(self, driver, attr, selector):
+        cached = getattr(self, attr, None)
+        if cached is not None:
+            try:
+                _ = cached.tag_name
+                return cached
+            except Exception:
+                setattr(self, attr, None)
+
+        found = self._topas_find_element(driver, selector)
+        setattr(self, attr, found)
+        return found
+
+    def _topas_find_element(self, driver, selector):
+        try:
+            original_handle = driver.current_window_handle
+        except Exception:
+            original_handle = None
+
+        for handle in list(driver.window_handles):
+            try:
+                driver.switch_to.window(handle)
+                driver.switch_to.default_content()
+                found = self._topas_find_element_in_frames(driver, selector)
+                if found is not None:
+                    return found
+            except Exception:
+                continue
+
+        if original_handle:
+            try:
+                driver.switch_to.window(original_handle)
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+        return None
+
+    def _topas_find_element_in_frames(self, driver, selector, depth=0, max_depth=4):
+        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        if elements:
+            return elements[0]
+        if depth >= max_depth:
+            return None
+
+        frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
+        for frame in frames:
+            try:
+                driver.switch_to.frame(frame)
+                found = self._topas_find_element_in_frames(driver, selector, depth + 1, max_depth)
+                if found is not None:
+                    return found
+            except Exception:
+                pass
+            finally:
+                try:
+                    driver.switch_to.parent_frame()
+                except Exception:
+                    pass
+        return None
+
+    def _topas_has_entry_shell(self, driver):
+        return self._topas_find_entry_shell(driver) is not None
+
+    def _topas_shell_text(self, driver, shell):
+        try:
+            text = driver.execute_script(
+                'return arguments[0].innerText || arguments[0].textContent || "";',
+                shell,
+            ) or ''
+            if text.strip():
+                return text
+        except Exception:
+            pass
+        return shell.text or ''
+
+    def _topas_shell_excerpt(self, driver, limit=240):
+        shell = self._topas_find_entry_shell(driver)
+        if shell is None:
+            return ''
+        text = self._topas_shell_text(driver, shell).replace('\r', ' ').replace('\n', ' ')
+        text = ' '.join(text.split())
+        return text[:limit] if text else '(빈 화면)'
+
+    def _topas_debug_location(self, driver):
+        locations = []
+        try:
+            handles = list(driver.window_handles)
+        except Exception:
+            handles = []
+        for idx, handle in enumerate(handles, start=1):
+            try:
+                driver.switch_to.window(handle)
+                title = driver.title or '(제목 없음)'
+                url = driver.current_url or '(주소 없음)'
+                locations.append(f'{idx}. {title} - {url}')
+            except Exception:
+                continue
+        return ' / '.join(locations) if locations else '(확인 불가)'
+
+    def _topas_prompt_is_idle(self, driver):
+        try:
+            prompt = self._topas_find_prompt_input(driver)
+            if prompt is None:
+                return False
+            return (prompt.get_attribute('value') or '') == ''
+        except Exception:
+            return False
+
+    def _topas_progress_update(self, done, total, pct, request, elapsed):
+        self.topas_progress_bar['value'] = done
+        self.topas_progress_lbl.config(text=f'{done} / {total} ({pct}%)')
+        self._set_topas_status(f'조회 중 · {done}/{total}', self.accent_green)
+        self._append_topas_log(f'[{done}/{total}] {request} 완료 ({elapsed:.2f}s)\n')
+
+    def finish_topas_query_on_ui(self, results, error_message, stopped, elapsed):
+        self.clean_up_ui_after_topas()
+        if error_message:
+            self._set_topas_status('조회 오류', self.accent_red)
+            messagebox.showerror('TOPAS 조회 오류', error_message)
+            if results:
+                self.show_topas_results_popup(results, elapsed, stopped=True)
+            return
+
+        if stopped:
+            self._set_topas_status('사용자 중지 · 부분 결과 보관', self.accent_orange)
+            self._append_topas_log(f'[중지 완료] {len(results)}개 원문을 보관했습니다. 총 {elapsed:.1f}s\n')
+        else:
+            self._set_topas_status('조회 완료', self.accent_green)
+            self._append_topas_log(f'[조회 완료] {len(results)}개 원문을 보관했습니다. 총 {elapsed:.1f}s\n')
+
+        if results:
+            self.show_topas_results_popup(results, elapsed, stopped=stopped)
+
+    def clean_up_ui_after_topas(self):
+        self.is_running = False
+        self.topas_stop_requested = False
+        self.topas_query_btn.config(state=tk.NORMAL)
+        self.topas_stop_btn.config(state=tk.DISABLED, text='■  중지')
+        self.start_btn.config(state=tk.NORMAL)
+        self.pause_btn.config(state=tk.DISABLED, text='‖  일시 중지', bg=self.accent_orange)
+        self.stop_btn.config(state=tk.DISABLED, text='■  중지')
+        self._set_inputs_locked(False)
+
+    def show_topas_results_popup(self, results, elapsed, stopped=False):
+        title = 'TOPAS 조회 결과'
+        popup_bg = '#ffffff'
+        popup_fg = '#111827'
+        popup_border = '#d1d5db'
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.configure(bg=popup_bg)
+        popup.geometry('980x680')
+        popup.minsize(720, 460)
+
+        header = tk.Frame(popup, bg=popup_bg, padx=14, pady=12)
+        header.pack(fill=tk.X)
+        status = '부분 결과' if stopped else '전체 결과'
+        tk.Label(
+            header,
+            text=f'{status} · 원문 {len(results)}개 · {elapsed:.1f}s',
+            font=('맑은 고딕', 11, 'bold'),
+            bg=popup_bg,
+            fg=popup_fg,
+        ).pack(side=tk.LEFT)
+
+        body = tk.Frame(popup, bg=popup_border)
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
+
+        result_text = '\n\n'.join(results)
+        text_widget = ScrolledText(
+            body,
+            bg=popup_bg,
+            fg=popup_fg,
+            insertbackground=popup_fg,
+            selectbackground='#bfdbfe',
+            selectforeground=popup_fg,
+            font=('Consolas', 10),
+            bd=0,
+            relief=tk.FLAT,
+            padx=10,
+            pady=8,
+            wrap=tk.NONE,
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        text_widget.insert('1.0', result_text)
+
+        footer = tk.Frame(popup, bg=popup_bg, padx=14)
+        footer.pack(fill=tk.X, pady=(0, 12))
+
+        def copy_all():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(result_text)
+            self.root.update()
+            self._append_topas_log('[복사] TOPAS 조회 원문 전체를 클립보드에 복사했습니다.\n')
+
+        copy_btn = tk.Button(
+            footer,
+            text='전체 복사하기',
+            width=14,
+            bg=self.accent_color,
+            fg='white',
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.accent_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=copy_all,
+        )
+        copy_btn.pack(side=tk.LEFT)
+        self._add_hover(copy_btn, self.accent_color, self.accent_hover)
+
+        close_btn = tk.Button(
+            footer,
+            text='닫기',
+            width=10,
+            bg='#f3f4f6',
+            fg=popup_fg,
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground='#e5e7eb',
+            activeforeground=popup_fg,
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=popup.destroy,
+        )
+        close_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._add_hover(close_btn, '#f3f4f6', '#e5e7eb', normal_fg=popup_fg, hover_fg=popup_fg)
+
+    def _set_topas_status(self, text, color=None):
+        if hasattr(self, 'topas_status_lbl'):
+            self.topas_status_lbl.config(text=text, fg=color or self.fg_color)
+
+    def _append_topas_log(self, text):
+        if not hasattr(self, 'topas_log_txt'):
+            return
+        self.topas_log_txt.insert(tk.END, text)
+        self.topas_log_txt.see(tk.END)
 
     # ------------------------------------------------------------------
     # ERP 제어 (gui.py의 검증된 로직 그대로)
@@ -2298,22 +3187,32 @@ class RpaGuiApp:
             messagebox.showerror('파일 없음', 'chrome_debug.bat 파일을 찾을 수 없습니다.')
             return
 
+        target_url, target_name = self._get_debug_browser_target()
         self.chrome_launch_btn.config(state=tk.DISABLED, text='여는 중…')
-        self.set_status('ERP 브라우저를 여는 중입니다…', self.accent_orange)
+        if target_name == 'TOPAS':
+            self._set_topas_status('TOPAS 브라우저를 여는 중입니다…', self.accent_orange)
+        else:
+            self.set_status('ERP 브라우저를 여는 중입니다…', self.accent_orange)
         self.root.update_idletasks()
 
         def _restore():
-            self.chrome_launch_btn.config(state=tk.NORMAL, text='ERP 켜기')
-            self.set_status('ERP 브라우저 준비 완료 · 로그인 후 시작하세요', self.accent_green)
+            self.chrome_launch_btn.config(state=tk.NORMAL, text='브라우저 켜기')
+            if target_name == 'TOPAS':
+                self._set_topas_status('TOPAS 브라우저 준비 완료 · 로그인 후 첫 조회를 실행하세요', self.accent_green)
+            else:
+                self.set_status('ERP 브라우저 준비 완료 · 로그인 후 시작하세요', self.accent_green)
 
         try:
-            subprocess.Popen([bat_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
-            print('[브라우저 기동] 디버깅용 크롬 브라우저 기동 명령을 전달했습니다.')
+            subprocess.Popen([bat_path, target_url], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            print(f'[브라우저 기동] 디버깅용 크롬 브라우저 기동 명령을 전달했습니다. ({target_name})')
             self.root.after(3000, _restore)
         except Exception as e:
             print(f'[오류] 크롬 기동 실패: {str(e)}')
-            self.chrome_launch_btn.config(state=tk.NORMAL, text='ERP 켜기')
-            self.set_status('크롬 기동 실패', self.accent_red)
+            self.chrome_launch_btn.config(state=tk.NORMAL, text='브라우저 켜기')
+            if target_name == 'TOPAS':
+                self._set_topas_status('크롬 기동 실패', self.accent_red)
+            else:
+                self.set_status('크롬 기동 실패', self.accent_red)
             messagebox.showerror('기동 오류', f'크롬 기동에 실패했습니다:\n{str(e)}')
 
     def rpa_worker_loop(self):

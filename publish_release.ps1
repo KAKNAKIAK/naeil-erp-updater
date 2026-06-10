@@ -29,6 +29,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $RootLatest  = Join-Path $ProjectRoot "latest.json"
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 # 0) 버전 결정: 인자 없으면 build_setup.ps1 의 $Version 사용
 if (-not $Version) {
@@ -116,7 +117,8 @@ $j.sha256 = $AssetHash
 if ($j.download_url -notmatch '/NaeilERPUpdater_Setup_.+\.exe$') { throw "latest.json download_url 비정상: '$($j.download_url)'" }
 if ($j.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "latest.json sha256 비정상: '$($j.sha256)'" }
 if ($j.version -ne $Version) { throw "latest.json version 불일치: '$($j.version)' != '$Version'" }
-($j | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $RootLatest -Encoding UTF8
+$RootLatestJson = $j | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($RootLatest, $RootLatestJson, $Utf8NoBom)
 Write-Host "[publish] 루트 latest.json 동기화 완료"
 
 # 5) 커밋 & 푸시

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "v3.0.3"
+$Version = "v4.0.0"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"
@@ -8,6 +8,7 @@ $ReleaseDir = Join-Path $ReleaseRoot "NaeilERPUpdater"
 $SetupOut = Join-Path $ReleaseRoot "NaeilERPUpdater_Setup_$Version.exe"
 $SetupAlias = Join-Path $ReleaseRoot "NaeilERPUpdater_Setup.exe"
 $TempInstallerDir = Join-Path ([System.IO.Path]::GetTempPath()) "NaeilERPUpdaterInstaller2"
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Reset-TempDir {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -129,8 +130,8 @@ try {
         if ($Latest.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "latest.json sha256 invalid" }
         $Json = $Latest | ConvertTo-Json -Depth 10
         # 루트(푸시 대상)와 release 사본을 모두 동기화 -> 해시 불일치 영구 방지
-        Set-Content -LiteralPath $LatestOut -Value $Json -Encoding UTF8
-        Set-Content -LiteralPath $LatestTemplate -Value $Json -Encoding UTF8
+        [System.IO.File]::WriteAllText($LatestOut, $Json, $Utf8NoBom)
+        [System.IO.File]::WriteAllText($LatestTemplate, $Json, $Utf8NoBom)
         Write-Host "Latest manifest (release): $LatestOut"
         Write-Host "Latest manifest (root):    $LatestTemplate"
         Write-Host "Download URL: $DownloadUrl"
