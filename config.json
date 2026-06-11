@@ -17,7 +17,7 @@
   "erp_grid_ready_stable_seconds": 1.0,
   "topas_poll_interval": 0.04,
   "topas_response_stable_wait": 0.2,
-  "topas_batch_timeout": 120,
+  "topas_batch_timeout": 80,
   "topas_parse_tail_chars": 80000,
   "topas_batch_size": 10,
   "grid_id": "#gridMain",

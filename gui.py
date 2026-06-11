@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Naeil Tour ERP 요금 업데이트 RPA — v4.0.1
+Naeil Tour ERP 요금 업데이트 RPA — v4.0.2
 
 주요 기능:
   - 앱에 내장된 스프레드시트(셀) 그리드에 요금 직접 입력/수정.
@@ -41,7 +41,7 @@ import excel_loader
 import update_client
 from topas.availability import parse_availability_text
 
-APP_VERSION = "v4.0.1"
+APP_VERSION = "v4.0.2"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -346,7 +346,7 @@ class RpaGuiApp:
             'erp_grid_ready_stable_seconds': 1.0,
             'topas_poll_interval': 0.04,
             'topas_response_stable_wait': 0.2,
-            'topas_batch_timeout': 120,
+            'topas_batch_timeout': 80,
             'topas_parse_tail_chars': 80000,
             'topas_batch_size': 10,
             'selectors': default_selectors
@@ -2567,7 +2567,7 @@ class RpaGuiApp:
 
     def _topas_wait_next_blocks(self, driver, previous_block, expected_count, timeout=None):
         if timeout is None:
-            timeout = self._float_config('topas_batch_timeout', 120, 10, 300)
+            timeout = self._float_config('topas_batch_timeout', 80, 10, 300)
         deadline = time.perf_counter() + timeout
         last_request = None
         last_loaded_count = 0

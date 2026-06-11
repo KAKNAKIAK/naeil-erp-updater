@@ -1,10 +1,10 @@
 {
-    "version":  "v4.0.1",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.1/NaeilERPUpdater_Setup_v4.0.1.exe",
-    "sha256":  "940485BCE0C0344E13D5C486105184CE5FE84FC425A5D8E49B8CAF3B8E25770F",
+    "version":  "v4.0.2",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.2/NaeilERPUpdater_Setup_v4.0.2.exe",
+    "sha256":  "59DA844B403A6034830121F1CEF435E9563A877041E181EC4A718A3227F71B98",
     "notes":  [
-                  "버그 수정: TOPAS Entry 화면에서 AC1 입력창이 비활성/숨김 상태로 잡혀 조회가 중단되던 문제를 수정했습니다.",
-                  "AC1 전송 전 실제 입력 가능한 프롬프트인지 확인하고, 실패 시 다시 포커스/클릭 후 재시도합니다.",
-                  "TOPAS 입력 실패 시 긴 Selenium 오류 대신 원인을 알아보기 쉬운 안내 메시지로 표시합니다."
+                  "버그 수정: TOPAS 조회 명령이 /AZE처럼 편명 없이 항공사 코드만 있는 경우 AC1 응답을 0개로 잘못 판단하던 문제를 수정했습니다.",
+                  "NO FLIGHT가 섞인 날짜도 정상 응답 블록으로 집계해 다음 묶음 진행과 결과 팝업에 포함합니다.",
+                  "편명 지정 조회(/AZE517 등)와 항공사-only 조회(/AZE)를 모두 지원하며, 묶음 응답 최대 대기 시간을 80초로 조정했습니다."
               ]
 }
