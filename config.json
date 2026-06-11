@@ -5,6 +5,10 @@
   "login_timeout": 180,
   "use_existing_browser": true,
   "debugger_address": "127.0.0.1:9222",
+  "topas_debugger_address": "127.0.0.1:9222",
+  "erp_debugger_address": "127.0.0.1:9223",
+  "topas_chrome_profile_dir": "ChromeProfile",
+  "erp_chrome_profile_dir": "ChromeProfile_ERP",
   "erp_url": "http://erp.naeiltour.co.kr",
   "history_log_path": "logs/update_history.csv",
   "screenshot_dir": "logs/screenshots",
@@ -20,6 +24,16 @@
   "topas_batch_timeout": 80,
   "topas_parse_tail_chars": 80000,
   "topas_batch_size": 10,
+  "topas_raw_dir": "logs/topas_raw",
+  "fare_cache_path": "cache/fares_snapshot.json",
+  "anomaly_y_ratio": [
+    0.2,
+    1.5
+  ],
+  "firestore": {
+    "project_id": "fare-calculator-2026",
+    "api_key": "AIzaSyAm-_kZz9Kn4WgeJyVMEyV_TZ3Za2uouFs"
+  },
   "grid_id": "#gridMain",
   "grid_page_size": 500,
   "paging_search_button": "#gridMain_r",

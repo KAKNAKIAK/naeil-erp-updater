@@ -74,18 +74,22 @@ NO FLIGHT FOR THIS CITY PAIR - ENTER A CONNECT POINT /X...
 CK ALT*ORIG GMP SSN XSM
 >"""
 
-AIRLINE_ONLY_REQUEST_SAMPLE = """>
+AIRLINE_ONLY_ZE_MIXED_SAMPLE = """>
+AN17SEPICNCNX/AZE -AC-
+** AMADEUS AVAILABILITY - AN ** CNX CHIANG MAI.TH             98 TH 17SEP 0000
+ 1   ZE 517  Y9 B9 H9 K9 M9 /ICN 1 CNX I  1810    2205  E0/738       5:55
+             N9 Q9 S9 V9 W9
+>
 AC1
 AN18SEPICNCNX/AZE -AC-
-** AMADEUS AVAILABILITY - AN ** CNX CHIANG MAI.TH               99 FR 18SEP 0000
 NO FLIGHT FOR THIS CITY PAIR - ENTER A CONNECT POINT /X...
 CK ALT*ORIG GMP SSN XSM
 >
 AC1
 AN19SEPICNCNX/AZE -AC-
-** AMADEUS AVAILABILITY - AN ** CNX CHIANG MAI.TH              100 SA 19SEP 0000
- 1   ZE 517  Y9 B9 H9 J9 K9 L8 GR /ICN 1 CNX     1830    2240  E0/738       6:10
-             FR
+** AMADEUS AVAILABILITY - AN ** CNX CHIANG MAI.TH            100 SA 19SEP 0000
+ 1   ZE 517  Y9 B9 H9 K9 M9 /ICN 1 CNX I  1810    2205  E0/738       5:55
+             N9 Q9 S9 V9 W9
 >"""
 
 
@@ -189,18 +193,23 @@ class TopasAvailabilityTest(unittest.TestCase):
         self.assertEqual(blocks[2].flights, ())
         self.assertIn("NO FLIGHT", blocks[2].raw_text)
 
-    def test_parses_airline_only_request_without_flight_number(self):
-        blocks = parse_availability_text(AIRLINE_ONLY_REQUEST_SAMPLE, year_hint=2026)
+    def test_keeps_airline_only_request_no_flight_blocks(self):
+        blocks = parse_availability_text(AIRLINE_ONLY_ZE_MIXED_SAMPLE, year_hint=2026)
 
         self.assertEqual([block.travel_date for block in blocks], [
+            date(2026, 9, 17),
             date(2026, 9, 18),
             date(2026, 9, 19),
         ])
-        self.assertEqual(blocks[0].flights, ())
-        self.assertIn("NO FLIGHT", blocks[0].raw_text)
-        self.assertEqual(len(blocks[1].flights), 1)
-        self.assertEqual(blocks[1].flights[0].airline, "ZE")
-        self.assertEqual(blocks[1].flights[0].flight, "517")
+        self.assertEqual(blocks[0].request_command, "AN17SEPICNCNX/AZE -AC-")
+        self.assertEqual(blocks[0].origin, "ICN")
+        self.assertEqual(blocks[0].destination, "CNX")
+        self.assertEqual(len(blocks[0].flights), 1)
+        self.assertEqual(blocks[0].flights[0].airline, "ZE")
+        self.assertEqual(blocks[1].request_command, "AN18SEPICNCNX/AZE -AC-")
+        self.assertEqual(blocks[1].flights, ())
+        self.assertIn("NO FLIGHT", blocks[1].raw_text)
+        self.assertEqual(len(blocks[2].flights), 1)
 
 
 if __name__ == "__main__":

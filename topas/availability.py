@@ -32,7 +32,7 @@ MONTH_NAMES = {v: k for k, v in MONTHS.items()}
 REQUEST_RE = re.compile(
     r"^AN(?P<day>\d{1,2})(?P<month>[A-Z]{3})"
     r"(?P<origin>[A-Z]{3})(?P<destination>[A-Z]{3})"
-    r"/A(?P<airline>[A-Z0-9]{2})(?P<flight>\d{0,4})",
+    r"/A(?P<airline>[A-Z0-9]{2})(?P<flight>\d{0,4})(?=\b|\s|-|$)",
     re.IGNORECASE,
 )
 

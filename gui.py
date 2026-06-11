@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Naeil Tour ERP 요금 업데이트 RPA — v4.0.2
+Naeil Tour ERP 요금 업데이트 RPA — v4.0.1
 
 주요 기능:
   - 앱에 내장된 스프레드시트(셀) 그리드에 요금 직접 입력/수정.
@@ -20,7 +20,7 @@ import queue
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -39,9 +39,15 @@ from tksheet import Sheet
 import pandas as pd
 import excel_loader
 import update_client
+from fare.calculator import calculate_round_trips, js_round
+from fare.exporter import export_results_to_excel, results_to_tsv, to_erp_rows
+from fare.parser import parse_topas_text, summarize_records
+from fare.route_select import filter_routes, infer_route_from_topas_text
+from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
+from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v4.0.2"
+APP_VERSION = "v5.0.0"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -226,29 +232,40 @@ class RpaGuiApp:
         self.root.title(f'Naeil Tour ERP 요금 업데이트 RPA ({APP_VERSION})')
 
         # 오른쪽 '요금 입력표' 펼침 패널 크기 (기본 접힘 상태로 시작)
-        self.win_height = 820
-        self.panel_width = 750
-        self.collapsed_width = 860
+        self.win_height = 906
+        self.panel_width = 878
+        self.collapsed_width = 1006
         self.expanded_width = self.collapsed_width + self.panel_width
         self.panel_expanded = False
         self.root.geometry(f'{self.collapsed_width}x{self.win_height}')
-        self.root.minsize(self.collapsed_width, 700)
+        self.root.minsize(self.collapsed_width, 774)
 
-        # --- 색상 팔레트 (다크 테마 정돈) ---
-        self.bg_color = '#15161c'
-        self.card_color = '#21232c'
-        self.card_hover = '#2a2d38'
-        self.fg_color = '#f3f4f6'
-        self.fg_muted = '#969aa6'
-        self.accent_color = '#3b82f6'
-        self.accent_hover = '#2f6fe0'
-        self.accent_green = '#22c55e'
-        self.accent_green_hover = '#1ba34d'
-        self.accent_orange = '#f59e0b'
-        self.accent_orange_hover = '#d98806'
-        self.accent_red = '#ef4444'
-        self.accent_red_hover = '#dc2626'
-        self.border_color = '#2c303a'
+        # --- 색상 팔레트 (V5 다크 디자인 토큰) ---
+        self.bg_color = '#0e1117'          # 앱 배경
+        self.card_color = '#161b24'        # 카드 배경
+        self.card_hover = '#1f2632'        # 카드 호버
+        self.fg_color = '#e8ecf4'          # 본문 텍스트
+        self.fg_muted = '#8b95a7'          # 보조 텍스트
+        self.accent_color = '#4c8dff'      # 주 액션 (블루)
+        self.accent_hover = '#3a77e6'
+        self.accent_green = '#2fae6f'      # 실행 (그린)
+        self.accent_green_hover = '#27955e'
+        self.accent_orange = '#e3a23d'     # 주의 (앰버)
+        self.accent_orange_hover = '#c98a28'
+        self.accent_red = '#e05d56'        # 위험 (레드)
+        self.accent_red_hover = '#c64b45'
+        self.border_color = '#252d3b'      # 카드 테두리
+        # 파생 토큰
+        self.input_bg = '#0a0d13'          # 입력창/콘솔 배경
+        self.input_fg = '#ccd4e0'          # 콘솔 텍스트
+        self.btn_neutral_bg = '#222a37'    # 보조(중립) 버튼
+        self.btn_neutral_hover = '#2c3646'
+        self.btn_neutral_fg = '#cfd7e4'
+        self.tab_selected_bg = '#1c2433'   # 선택된 탭 배경
+        self.tree_bg = '#11161f'           # 결과표 배경
+        self.tree_row_alt = '#151b26'      # 결과표 줄무늬
+        self.tree_head_bg = '#1a212d'      # 결과표/입력표 헤더
+        self.disabled_fg = '#4d5666'       # 비활성 텍스트
 
         self.root.configure(bg=self.bg_color)
         self._setup_styles()
@@ -267,8 +284,23 @@ class RpaGuiApp:
         self.topas_stop_requested = False
         self._topas_shell_el = None
         self._topas_prompt_el = None
+        self._topas_window_handle = None
         self.current_main_tab = 'fare'
         self.main_tab_controls = {}
+        self.topas_target_slot = 'departure'
+        self.fare_snapshot = None
+        self.fare_routes = []
+        self.route_var = tk.StringVar(value='')
+        self.route_user_modified = False
+        self.custom_night_var = tk.StringVar(value='')
+        self.night_vars = {}
+        self.night_chip_buttons = {}
+        self.v5_calculation_result = None
+        self.selected_result_night = None
+        self.last_topas_backup_paths = []
+        self._night_auto_recalc_busy = False
+        self._merged_fare_restore_data = None
+        self._merged_fare_merged_data = None
 
         # 수식 입력줄(formula bar) / 클릭 참조 상태
         self.fb_var = tk.StringVar()
@@ -284,6 +316,7 @@ class RpaGuiApp:
         self.filter_mode = tk.StringVar(value="ALL")  # ALL, FROM_DATE, SPECIFIC, DATE_RANGE
         self.filter_value = tk.StringVar(value="")
         self.filter_value_end = tk.StringVar(value="")
+        self.filter_panel_expanded = False
         self.filter_mode.trace_add("write", self._on_filter_mode_change)
         self.filter_value.trace_add("write", self._on_filter_value_change)
         self.filter_value_end.trace_add("write", self._on_filter_value_change)
@@ -334,6 +367,10 @@ class RpaGuiApp:
             'login_timeout': 180,
             'use_existing_browser': True,
             'debugger_address': '127.0.0.1:9222',
+            'topas_debugger_address': '127.0.0.1:9222',
+            'erp_debugger_address': '127.0.0.1:9223',
+            'topas_chrome_profile_dir': 'ChromeProfile',
+            'erp_chrome_profile_dir': 'ChromeProfile_ERP',
             'erp_url': 'http://erp.naeiltour.co.kr',
             'history_log_path': 'logs/update_history.csv',
             'screenshot_dir': 'logs/screenshots',
@@ -349,6 +386,13 @@ class RpaGuiApp:
             'topas_batch_timeout': 80,
             'topas_parse_tail_chars': 80000,
             'topas_batch_size': 10,
+            'topas_raw_dir': 'logs/topas_raw',
+            'fare_cache_path': 'cache/fares_snapshot.json',
+            'anomaly_y_ratio': [0.2, 1.5],
+            'firestore': {
+                'project_id': 'fare-calculator-2026',
+                'api_key': 'AIzaSyAm-_kZz9Kn4WgeJyVMEyV_TZ3Za2uouFs',
+            },
             'selectors': default_selectors
         }
         if not os.path.exists(config_path):
@@ -554,16 +598,110 @@ class RpaGuiApp:
             style.theme_use('clam')
         except Exception:
             pass
+        # 진행바: 슬림한 형태
         style.configure(
             'Accent.Horizontal.TProgressbar',
-            troughcolor='#0e0f14',
-            bordercolor='#0e0f14',
+            troughcolor=self.input_bg,
+            bordercolor=self.input_bg,
             background=self.accent_green,
             lightcolor=self.accent_green,
             darkcolor=self.accent_green,
-            thickness=18,
+            thickness=7,
         )
+        try:
+            style.layout('Result.TNotebook.Tab', [])
+            style.configure('Result.TNotebook', tabmargins=0, borderwidth=0, background=self.card_color)
+        except Exception:
+            pass
+        # 결과표 (Treeview) 다크
+        style.configure(
+            'Treeview',
+            background=self.tree_bg,
+            fieldbackground=self.tree_bg,
+            foreground='#dfe5f0',
+            rowheight=30,
+            borderwidth=0,
+            relief='flat',
+            font=('맑은 고딕', 10),
+        )
+        style.configure(
+            'Treeview.Heading',
+            background=self.tree_head_bg,
+            foreground=self.fg_muted,
+            font=('맑은 고딕', 9, 'bold'),
+            borderwidth=0,
+            relief='flat',
+            padding=(8, 7),
+        )
+        style.map(
+            'Treeview.Heading',
+            background=[('active', '#212a38')],
+            foreground=[('active', self.fg_color)],
+        )
+        style.map(
+            'Treeview',
+            background=[('selected', '#28354e')],
+            foreground=[('selected', '#ffffff')],
+        )
+        # 스크롤바 다크 (Windows 기본 스크롤바는 색을 무시하므로 ttk 사용)
+        for orient in ('Vertical', 'Horizontal'):
+            style.configure(
+                f'Dark.{orient}.TScrollbar',
+                background=self.btn_neutral_bg,
+                troughcolor=self.input_bg,
+                bordercolor=self.input_bg,
+                arrowcolor=self.fg_muted,
+                relief='flat',
+                gripcount=0,
+            )
+            style.map(
+                f'Dark.{orient}.TScrollbar',
+                background=[('active', self.btn_neutral_hover), ('pressed', self.btn_neutral_hover)],
+                arrowcolor=[('active', self.fg_color)],
+            )
+        # 콤보박스 다크
+        style.configure(
+            'TCombobox',
+            fieldbackground=self.input_bg,
+            background=self.btn_neutral_bg,
+            foreground=self.fg_color,
+            arrowcolor=self.fg_muted,
+            bordercolor=self.border_color,
+            lightcolor=self.border_color,
+            darkcolor=self.border_color,
+            insertcolor=self.fg_color,
+            padding=(8, 4),
+        )
+        style.map(
+            'TCombobox',
+            fieldbackground=[('readonly', self.input_bg), ('focus', self.input_bg)],
+            foreground=[('disabled', self.disabled_fg)],
+            bordercolor=[('focus', self.accent_color)],
+            lightcolor=[('focus', self.accent_color)],
+            darkcolor=[('focus', self.accent_color)],
+            arrowcolor=[('active', self.fg_color)],
+        )
+        # 콤보박스 드롭다운 목록 다크
+        try:
+            self.root.option_add('*TCombobox*Listbox.background', self.input_bg)
+            self.root.option_add('*TCombobox*Listbox.foreground', self.fg_color)
+            self.root.option_add('*TCombobox*Listbox.selectBackground', self.accent_color)
+            self.root.option_add('*TCombobox*Listbox.selectForeground', '#ffffff')
+            self.root.option_add('*TCombobox*Listbox.borderWidth', 0)
+        except Exception:
+            pass
         self._style = style
+
+    def _make_dark_text(self, parent, **text_kwargs):
+        """tk.Text + 다크 ttk 스크롤바 묶음을 만들어 (프레임, 텍스트) 를 돌려준다."""
+        bg = text_kwargs.get('bg', self.input_bg)
+        frame = tk.Frame(parent, bg=bg)
+        vbar = ttk.Scrollbar(frame, orient='vertical', style='Dark.Vertical.TScrollbar')
+        text = tk.Text(frame, yscrollcommand=vbar.set, **text_kwargs)
+        vbar.config(command=text.yview)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        return frame, text
 
     def _add_hover(self, widget, normal_bg, hover_bg, normal_fg=None, hover_fg=None):
         def on_enter(_e):
@@ -713,39 +851,29 @@ class RpaGuiApp:
 
         title_row = tk.Frame(title_frame, bg=self.bg_color)
         title_row.pack(anchor=tk.W)
-        title_label = tk.Label(title_row, text='Naeil Tour ERP 요금 업데이트', font=('맑은 고딕', 17, 'bold'), bg=self.bg_color, fg=self.fg_color)
+        title_label = tk.Label(title_row, text='NaeilERPUpdater V5', font=('맑은 고딕', 16, 'bold'), bg=self.bg_color, fg=self.fg_color)
         title_label.pack(side=tk.LEFT)
-        version_badge = tk.Label(title_row, text=f' {APP_VERSION} ', font=('맑은 고딕', 8, 'bold'), bg=self.card_color, fg=self.accent_orange)
-        version_badge.pack(side=tk.LEFT, padx=(8, 0), pady=(4, 0))
+        version_badge = tk.Label(title_row, text=f' {APP_VERSION} ', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
+        version_badge.pack(side=tk.LEFT, padx=(10, 0), pady=(5, 0))
 
-        fare_site_btn = tk.Button(
-            title_row, text='요금조회 사이트가기 ↗', font=('맑은 고딕', 8, 'bold'),
-            bg=self.card_color, fg=self.accent_color,
-            activebackground=self.accent_color, activeforeground='white',
-            bd=0, relief=tk.FLAT, cursor='hand2', padx=8, pady=2,
-            command=self.open_fare_site)
-        fare_site_btn.pack(side=tk.LEFT, padx=(10, 0), pady=(4, 0))
-        self._add_hover(fare_site_btn, self.card_color, self.accent_color, normal_fg=self.accent_color, hover_fg='white')
+        def _ghost_link(parent, text, command, hover_fg):
+            btn = tk.Button(
+                parent, text=text, font=('맑은 고딕', 8, 'bold'),
+                bg=self.bg_color, fg=self.fg_muted,
+                activebackground=self.bg_color, activeforeground=hover_fg,
+                bd=0, relief=tk.FLAT, cursor='hand2', padx=6, pady=2,
+                command=command)
+            self._add_hover(btn, self.bg_color, self.bg_color, normal_fg=self.fg_muted, hover_fg=hover_fg)
+            return btn
 
-        guide_btn = tk.Button(
-            title_row, text='가이드 매뉴얼 보기 ↗', font=('맑은 고딕', 8, 'bold'),
-            bg=self.card_color, fg=self.accent_orange,
-            activebackground=self.accent_orange, activeforeground='white',
-            bd=0, relief=tk.FLAT, cursor='hand2', padx=8, pady=2,
-            command=self.open_guide_site)
-        guide_btn.pack(side=tk.LEFT, padx=(10, 0), pady=(4, 0))
-        self._add_hover(guide_btn, self.card_color, self.accent_orange, normal_fg=self.accent_orange, hover_fg='white')
+        fare_site_btn = _ghost_link(title_row, '요금조회 사이트 ↗', self.open_fare_site, self.accent_color)
+        fare_site_btn.pack(side=tk.LEFT, padx=(14, 0), pady=(5, 0))
 
+        guide_btn = _ghost_link(title_row, '가이드 매뉴얼 ↗', self.open_guide_site, self.accent_color)
+        guide_btn.pack(side=tk.LEFT, padx=(4, 0), pady=(5, 0))
 
-
-        template_btn = tk.Button(
-            title_frame, text='엑셀 양식 다운받기 ↗', font=('맑은 고딕', 8, 'bold'),
-            bg=self.card_color, fg=self.accent_orange,
-            activebackground=self.accent_orange, activeforeground='white',
-            bd=0, relief=tk.FLAT, cursor='hand2', padx=8, pady=2,
-            command=self.download_excel_template)
-        template_btn.pack(anchor=tk.W, pady=(6, 0))
-        self._add_hover(template_btn, self.card_color, self.accent_orange, normal_fg=self.accent_orange, hover_fg='white')
+        template_btn = _ghost_link(title_frame, '엑셀 양식 다운받기 ↗', self.download_excel_template, self.accent_color)
+        template_btn.pack(anchor=tk.W, pady=(4, 0))
 
         self._build_main_tab_bar(main_col)
         self.main_content = tk.Frame(main_col, bg=self.bg_color)
@@ -761,9 +889,10 @@ class RpaGuiApp:
         toolbar = tk.Frame(sheet_card, bg=self.card_color)
         toolbar.pack(fill=tk.X, pady=(0, 6))
 
-        self._make_toolbar_btn(toolbar, '전체 지우기', self.card_hover, self.border_color, self.clear_sheet)
-        self._make_toolbar_btn(toolbar, '실행취소', self.card_hover, self.border_color, self.undo_sheet)
-        self._make_toolbar_btn(toolbar, '다시실행', self.card_hover, self.border_color, self.redo_sheet)
+        self._make_toolbar_btn(toolbar, '전체 지우기', self.btn_neutral_bg, self.btn_neutral_hover, self.clear_sheet, fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(toolbar, '실행취소', self.btn_neutral_bg, self.btn_neutral_hover, self.undo_sheet, fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(toolbar, '다시실행', self.btn_neutral_bg, self.btn_neutral_hover, self.redo_sheet, fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(toolbar, '요금구간 병합', self.accent_orange, self.accent_orange_hover, self.merge_sheet_fare_ranges)
         self._make_toolbar_btn(toolbar, '엑셀로 다운받기', self.accent_color, self.accent_hover, self.export_sheet_to_excel)
 
         self.period_mode_var = tk.BooleanVar(value=False)
@@ -772,7 +901,7 @@ class RpaGuiApp:
             variable=self.period_mode_var,
             bg=self.card_color, fg=self.fg_color,
             activebackground=self.card_color, activeforeground=self.fg_color,
-            selectcolor=self.bg_color,
+            selectcolor=self.input_bg,
             font=('맑은 고딕', 9),
             command=self.on_toggle_period_mode
         )
@@ -784,7 +913,7 @@ class RpaGuiApp:
         tk.Label(fb_frame, text='fx', font=('맑은 고딕', 10, 'bold'), bg=self.card_color, fg=self.accent_orange).pack(side=tk.LEFT, padx=(0, 6))
         self.active_lbl = tk.Label(fb_frame, text='', width=13, anchor=tk.W, font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
         self.active_lbl.pack(side=tk.LEFT, padx=(0, 6))
-        self.formula_entry = tk.Entry(fb_frame, textvariable=self.fb_var, bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1, font=('Consolas', 10))
+        self.formula_entry = tk.Entry(fb_frame, textvariable=self.fb_var, bg=self.input_bg, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1, font=('Consolas', 10))
         self.formula_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         self.formula_entry.bind('<Return>', self._commit_formula_bar)
         self.formula_entry.bind('<KP_Enter>', self._commit_formula_bar)
@@ -806,6 +935,23 @@ class RpaGuiApp:
         )
         try:
             self.sheet.change_theme("dark")
+        except Exception:
+            pass
+        try:
+            # 입력표 색을 V5 팔레트에 맞춘다 (실패 시 위의 dark 테마 그대로)
+            self.sheet.set_options(
+                table_bg=self.input_bg,
+                table_fg='#dfe5f0',
+                table_grid_fg='#222a37',
+                table_selected_cells_border_fg=self.accent_color,
+                header_bg=self.tree_head_bg,
+                header_fg=self.fg_muted,
+                header_grid_fg='#222a37',
+                index_bg=self.tree_head_bg,
+                index_fg=self.fg_muted,
+                index_grid_fg='#222a37',
+                top_left_bg=self.tree_head_bg,
+            )
         except Exception:
             pass
         # rc_insert_row/rc_delete_row는 비활성(행 추가·삭제는 툴바 버튼으로 → 수식↔행 매핑 유지)
@@ -862,20 +1008,52 @@ class RpaGuiApp:
         self.toggle_btn.pack(side=tk.LEFT, padx=(10, 6))
         self._add_hover(self.toggle_btn, self.accent_green, self.accent_green_hover)
 
+        self.data_source_badge = tk.Label(
+            action_row,
+            text='',
+            bg=self.bg_color,
+            fg=self.accent_orange,
+            font=('맑은 고딕', 8, 'bold'),
+            padx=8,
+            pady=4,
+        )
+        self.data_source_badge.pack(side=tk.LEFT, padx=(4, 0))
 
         # 3. 날짜 필터 카드
-        filter_card = tk.LabelFrame(self.fare_tab, text=' 날짜 필터 (선택) ', font=('맑은 고딕', 9, 'bold'), bg=self.card_color, fg=self.fg_muted, bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightthickness=1, padx=10, pady=6)
+        filter_card = tk.Frame(self.fare_tab, bg=self.card_color, highlightbackground=self.border_color, highlightthickness=1)
         filter_card.pack(fill=tk.X, padx=6, pady=(0, 8))
 
-        filter_modes_frame = tk.Frame(filter_card, bg=self.card_color)
+        filter_header = tk.Frame(filter_card, bg=self.card_color)
+        filter_header.pack(fill=tk.X)
+        self.filter_toggle_btn = tk.Button(
+            filter_header,
+            text='▸ 날짜 필터 (선택)',
+            bg=self.card_color,
+            fg=self.fg_muted,
+            activebackground=self.card_hover,
+            activeforeground=self.fg_color,
+            font=('맑은 고딕', 9, 'bold'),
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            anchor=tk.W,
+            padx=10,
+            pady=6,
+            command=self.toggle_filter_panel,
+        )
+        self.filter_toggle_btn.pack(fill=tk.X)
+
+        self.filter_body = tk.Frame(filter_card, bg=self.card_color)
+
+        filter_modes_frame = tk.Frame(self.filter_body, bg=self.card_color)
         filter_modes_frame.grid(row=0, column=0, padx=6, pady=4, sticky=tk.W)
         for txt, val in [("전체 대상", "ALL"), ("특정일 이후", "FROM_DATE"), ("특정 날짜 지정", "SPECIFIC"), ("기간 범위 지정", "DATE_RANGE")]:
-            rb = tk.Radiobutton(filter_modes_frame, text=txt, variable=self.filter_mode, value=val, bg=self.card_color, fg=self.fg_color, selectcolor=self.card_color, activebackground=self.card_color, activeforeground=self.fg_color)
+            rb = tk.Radiobutton(filter_modes_frame, text=txt, variable=self.filter_mode, value=val, bg=self.card_color, fg=self.fg_color, selectcolor=self.input_bg, activebackground=self.card_color, activeforeground=self.fg_color)
             rb.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.filter_input_container = tk.Frame(filter_card, bg=self.card_color)
+        self.filter_input_container = tk.Frame(self.filter_body, bg=self.card_color)
         self.filter_input_container.grid(row=1, column=0, padx=6, pady=(2, 4), sticky=tk.W)
-        self.filter_tip_lbl = tk.Label(filter_card, text='', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
+        self.filter_tip_lbl = tk.Label(self.filter_body, text='', font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
         self.filter_tip_lbl.grid(row=1, column=1, padx=(10, 0), sticky=tk.W)
 
         # 4. 진행 상태 바
@@ -899,8 +1077,10 @@ class RpaGuiApp:
 
         log_wrap = tk.Frame(self.fare_tab, bg=self.border_color, bd=0)
         log_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 10))
-        self.log_txt = ScrolledText(log_wrap, height=8, bg='#0c0d11', fg='#c9cdd6', insertbackground='white', font=('Consolas', 9), bd=0, relief=tk.FLAT, padx=10, pady=8)
-        self.log_txt.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        log_body, self.log_txt = self._make_dark_text(
+            log_wrap, height=8, bg=self.input_bg, fg=self.input_fg, insertbackground='white',
+            font=('Consolas', 9), bd=0, relief=tk.FLAT, padx=10, pady=8)
+        log_body.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
         # 6. 컨트롤 버튼
         control_frame = tk.Frame(self.fare_tab, bg=self.bg_color)
@@ -910,15 +1090,15 @@ class RpaGuiApp:
         self.start_btn.pack(side=tk.LEFT)
         self._add_hover(self.start_btn, self.accent_green, self.accent_green_hover)
 
-        self.pause_btn = tk.Button(control_frame, text='‖  일시 중지', width=13, height=2, bg=self.accent_orange, fg='white', font=('맑은 고딕', 10, 'bold'), activebackground=self.accent_orange_hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', command=self.toggle_pause)
+        self.pause_btn = tk.Button(control_frame, text='‖  일시 중지', width=13, height=2, bg=self.bg_color, fg=self.accent_orange, font=('맑은 고딕', 10, 'bold'), activebackground=self.accent_orange, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', disabledforeground=self.disabled_fg, highlightbackground='#574730', highlightthickness=1, command=self.toggle_pause)
         self.pause_btn.pack(side=tk.LEFT, padx=12)
         self.pause_btn.config(state=tk.DISABLED)
-        self._add_hover(self.pause_btn, self.accent_orange, self.accent_orange_hover)
+        self._add_hover(self.pause_btn, self.bg_color, self.accent_orange, normal_fg=self.accent_orange, hover_fg='white')
 
-        self.stop_btn = tk.Button(control_frame, text='■  중지', width=13, height=2, bg=self.accent_red, fg='white', font=('맑은 고딕', 10, 'bold'), activebackground=self.accent_red_hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', command=self.stop_rpa)
+        self.stop_btn = tk.Button(control_frame, text='■  중지', width=13, height=2, bg=self.bg_color, fg=self.accent_red, font=('맑은 고딕', 10, 'bold'), activebackground=self.accent_red, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', disabledforeground=self.disabled_fg, highlightbackground='#573a38', highlightthickness=1, command=self.stop_rpa)
         self.stop_btn.pack(side=tk.RIGHT)
         self.stop_btn.config(state=tk.DISABLED)
-        self._add_hover(self.stop_btn, self.accent_red, self.accent_red_hover)
+        self._add_hover(self.stop_btn, self.bg_color, self.accent_red, normal_fg=self.accent_red, hover_fg='white')
 
         self._build_topas_tab()
         self._select_main_tab('fare')
@@ -936,7 +1116,7 @@ class RpaGuiApp:
         tab_shell.pack(anchor=tk.W)
 
         self.main_tab_controls = {}
-        for key, label in [('fare', '요금수정'), ('topas', '토파스조회')]:
+        for key, label in [('fare', 'ERP 요금수정'), ('topas', '토파스 요금조회')]:
             slot = tk.Frame(tab_shell, bg=self.card_color)
             slot.pack(side=tk.LEFT)
             btn = tk.Button(
@@ -982,7 +1162,7 @@ class RpaGuiApp:
             target = self.topas_tab if tab_key == 'topas' else self.fare_tab
             target.pack(fill=tk.BOTH, expand=True)
 
-        selected_bg = '#1b1f29'
+        selected_bg = self.tab_selected_bg
         for key, controls in self.main_tab_controls.items():
             btn, underline, slot = controls
             selected = key == tab_key
@@ -997,17 +1177,20 @@ class RpaGuiApp:
             slot.config(bg=bg)
             underline.config(bg=self.accent_color if selected else self.card_color)
 
-    def _make_toolbar_btn(self, parent, text, bg, hover, command):
-        btn = tk.Button(parent, text=text, bg=bg, fg='white', font=('맑은 고딕', 9, 'bold'), activebackground=hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', padx=10, pady=4, command=command)
+    def _make_toolbar_btn(self, parent, text, bg, hover, command, fg='white'):
+        btn = tk.Button(parent, text=text, bg=bg, fg=fg, font=('맑은 고딕', 9, 'bold'), activebackground=hover, activeforeground='white', bd=0, relief=tk.FLAT, cursor='hand2', padx=10, pady=5, command=command)
         btn.pack(side=tk.LEFT, padx=(0, 6))
         self._add_hover(btn, bg, hover)
         self.toolbar_buttons.append(btn)
         return btn
 
     def _build_topas_tab(self):
-        topas_card = tk.LabelFrame(
-            self.topas_tab,
-            text=' TOPAS 조회 ',
+        outer = tk.Frame(self.topas_tab, bg=self.bg_color)
+        outer.pack(fill=tk.BOTH, expand=True, padx=6, pady=(10, 10))
+
+        collect_card = tk.LabelFrame(
+            outer,
+            text='',
             font=('맑은 고딕', 9, 'bold'),
             bg=self.card_color,
             fg=self.fg_muted,
@@ -1015,18 +1198,19 @@ class RpaGuiApp:
             relief=tk.FLAT,
             highlightbackground=self.border_color,
             highlightthickness=1,
-            padx=14,
-            pady=12,
+            padx=12,
+            pady=10,
         )
-        topas_card.pack(fill=tk.X, padx=6, pady=(10, 10))
+        collect_card.pack(fill=tk.X, pady=(0, 8))
 
-        topas_actions = tk.Frame(topas_card, bg=self.card_color)
-        topas_actions.pack(fill=tk.X)
+        collect_actions = tk.Frame(collect_card, bg=self.card_color)
+        collect_actions.pack(fill=tk.X)
 
+        self.topas_query_buttons = []
         self.topas_query_btn = tk.Button(
-            topas_actions,
-            text='AC1 연속조회 시작',
-            width=18,
+            collect_actions,
+            text='AC1 자동반복',
+            width=30,
             height=2,
             bg=self.accent_green,
             fg='white',
@@ -1038,81 +1222,1019 @@ class RpaGuiApp:
             cursor='hand2',
             command=self.prompt_topas_query_count,
         )
-        self.topas_query_btn.pack(side=tk.LEFT)
+        self.topas_query_btn.pack(side=tk.LEFT, padx=(0, 8))
         self._add_hover(self.topas_query_btn, self.accent_green, self.accent_green_hover)
+        self.topas_query_buttons.append(self.topas_query_btn)
 
         self.topas_stop_btn = tk.Button(
-            topas_actions,
+            collect_actions,
             text='■  중지',
             width=13,
             height=2,
-            bg=self.accent_red,
-            fg='white',
+            bg=self.card_color,
+            fg=self.accent_red,
             font=('맑은 고딕', 10, 'bold'),
-            activebackground=self.accent_red_hover,
+            activebackground=self.accent_red,
             activeforeground='white',
             bd=0,
             relief=tk.FLAT,
             cursor='hand2',
+            disabledforeground=self.disabled_fg,
+            highlightbackground='#573a38',
+            highlightthickness=1,
             command=self.stop_topas_query,
         )
         self.topas_stop_btn.pack(side=tk.RIGHT)
         self.topas_stop_btn.config(state=tk.DISABLED)
-        self._add_hover(self.topas_stop_btn, self.accent_red, self.accent_red_hover)
+        self._add_hover(self.topas_stop_btn, self.card_color, self.accent_red, normal_fg=self.accent_red, hover_fg='white')
 
-        topas_progress_frame = tk.Frame(self.topas_tab, bg=self.bg_color)
-        topas_progress_frame.pack(fill=tk.X, padx=6, pady=(2, 4))
-
+        topas_progress_frame = tk.Frame(collect_card, bg=self.card_color)
+        topas_progress_frame.pack(fill=tk.X, pady=(10, 4))
         self.topas_status_lbl = tk.Label(
             topas_progress_frame,
-            text='대기 중',
+            text='TOPAS 로그인 후 첫 날짜를 직접 조회하고 수집을 시작하세요.',
             font=('맑은 고딕', 9, 'bold'),
-            bg=self.bg_color,
+            bg=self.card_color,
             fg=self.fg_muted,
         )
         self.topas_status_lbl.pack(side=tk.LEFT)
-
         self.topas_progress_lbl = tk.Label(
             topas_progress_frame,
             text='0 / 0 (0%)',
             font=('맑은 고딕', 9),
-            bg=self.bg_color,
+            bg=self.card_color,
             fg=self.fg_muted,
         )
         self.topas_progress_lbl.pack(side=tk.RIGHT)
 
         self.topas_progress_bar = ttk.Progressbar(
-            self.topas_tab,
+            collect_card,
             orient='horizontal',
             mode='determinate',
             style='Accent.Horizontal.TProgressbar',
         )
-        self.topas_progress_bar.pack(fill=tk.X, padx=6, pady=(0, 10))
+        self.topas_progress_bar.pack(fill=tk.X)
 
-        topas_log_title = tk.Label(
-            self.topas_tab,
-            text='토파스 조회 작업 내용',
+        slots = tk.Frame(collect_card, bg=self.card_color)
+        slots.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        slots.grid_columnconfigure(0, weight=1)
+        slots.grid_columnconfigure(1, weight=1)
+
+        self.departure_raw_txt, self.departure_parse_lbl = self._build_raw_slot(slots, '출발편', 'departure', 0)
+        self.return_raw_txt, self.return_parse_lbl = self._build_raw_slot(slots, '귀국편', 'return', 1)
+        self._refresh_topas_collect_button_text()
+
+        calc_card = tk.LabelFrame(
+            outer,
+            text='',
             font=('맑은 고딕', 9, 'bold'),
-            bg=self.bg_color,
+            bg=self.card_color,
             fg=self.fg_muted,
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightthickness=1,
+            padx=12,
+            pady=10,
         )
-        topas_log_title.pack(anchor=tk.W, padx=6, pady=(0, 3))
+        calc_card.pack(fill=tk.X, pady=(0, 8))
 
-        topas_log_wrap = tk.Frame(self.topas_tab, bg=self.border_color, bd=0)
-        topas_log_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 10))
-        self.topas_log_txt = ScrolledText(
-            topas_log_wrap,
+        calc_row = tk.Frame(calc_card, bg=self.card_color)
+        calc_row.pack(fill=tk.X)
+        tk.Label(calc_row, text='항공노선', bg=self.card_color, fg=self.fg_color, font=('맑은 고딕', 9, 'bold')).pack(side=tk.LEFT)
+        self.route_combo = ttk.Combobox(calc_row, textvariable=self.route_var, width=28, values=[], font=('맑은 고딕', 10))
+        self.route_combo.pack(side=tk.LEFT, padx=(8, 8))
+        self.route_combo.bind('<KeyRelease>', self._on_route_search_keyrelease)
+        self.route_combo.bind('<Return>', self._commit_route_search)
+        self.route_combo.bind('<KP_Enter>', self._commit_route_search)
+        self.route_combo.bind('<<ComboboxSelected>>', self._on_route_selected)
+
+        tk.Label(calc_row, text='박수', bg=self.card_color, fg=self.fg_color, font=('맑은 고딕', 9, 'bold')).pack(side=tk.LEFT)
+        self.night_chip_frame = tk.Frame(calc_row, bg=self.card_color)
+        self.night_chip_frame.pack(side=tk.LEFT)
+        for night in (2, 3, 4, 5):
+            var = tk.BooleanVar(value=False)
+            self.night_vars[night] = var
+            self._make_night_chip(night)
+
+        custom_entry = tk.Entry(
+            calc_row,
+            textvariable=self.custom_night_var,
+            width=5,
+            bg=self.input_bg,
+            fg=self.fg_color,
+            insertbackground='white',
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            highlightthickness=1,
+            font=('Consolas', 10),
+        )
+        custom_entry.pack(side=tk.LEFT, padx=(10, 4), ipady=3)
+        custom_entry.bind('<Return>', lambda _event: self.add_custom_night_chip())
+
+        add_night_btn = tk.Button(
+            calc_row,
+            text='+추가',
+            bg=self.btn_neutral_bg,
+            fg=self.btn_neutral_fg,
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.btn_neutral_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            padx=8,
+            pady=4,
+            command=self.add_custom_night_chip,
+        )
+        add_night_btn.pack(side=tk.LEFT)
+        self._add_hover(add_night_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+        calc_btn = tk.Button(
+            calc_row,
+            text='요금 조회',
+            width=14,
+            bg=self.accent_color,
+            fg='white',
+            font=('맑은 고딕', 10, 'bold'),
+            activebackground=self.accent_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            padx=10,
+            pady=5,
+            command=self.calculate_topas_fares,
+        )
+        calc_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._add_hover(calc_btn, self.accent_color, self.accent_hover)
+
+        calc_actions = tk.Frame(calc_card, bg=self.card_color)
+        calc_actions.pack(fill=tk.X, pady=(10, 0))
+
+        fare_status_frame = tk.Frame(calc_actions, bg=self.card_color)
+        fare_status_frame.pack(side=tk.RIGHT)
+        self.fare_data_status_lbl = tk.Label(
+            fare_status_frame,
+            text='운임/시즌 미로드',
+            bg=self.card_color,
+            fg=self.fg_muted,
+            font=('맑은 고딕', 8),
+        )
+        self.fare_data_status_lbl.pack(side=tk.LEFT, padx=(0, 6))
+        self.refresh_fare_btn = tk.Button(
+            fare_status_frame,
+            text='↻',
+            width=3,
+            bg=self.btn_neutral_bg,
+            fg=self.fg_muted,
+            font=('맑은 고딕', 8, 'bold'),
+            activebackground=self.btn_neutral_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            padx=2,
+            pady=1,
+            command=self.refresh_fare_snapshot,
+        )
+        self.refresh_fare_btn.pack(side=tk.LEFT)
+        self._add_hover(self.refresh_fare_btn, self.btn_neutral_bg, self.btn_neutral_hover, normal_fg=self.fg_muted, hover_fg='white')
+
+        result_card = tk.LabelFrame(
+            outer,
+            text='',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_muted,
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightthickness=1,
+            padx=10,
+            pady=8,
+        )
+        result_card.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+
+        self.results_notebook = ttk.Notebook(result_card, style='Result.TNotebook')
+        self.results_notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.root.after(700, self.refresh_fare_snapshot)
+
+    def _build_raw_slot(self, parent, title, slot, column):
+        frame = tk.Frame(parent, bg=self.card_color)
+        frame.grid(row=0, column=column, sticky='nsew', padx=(0, 8) if column == 0 else (8, 0))
+
+        header = tk.Frame(frame, bg=self.card_color)
+        header.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(
+            header,
+            text=title,
+            bg=self.card_color,
+            fg=self.fg_color,
+            font=('맑은 고딕', 9, 'bold'),
+        ).pack(side=tk.LEFT)
+
+        view_btn = tk.Button(
+            header,
+            text='조회내용 전체 보기',
+            bg=self.btn_neutral_bg,
+            fg=self.btn_neutral_fg,
+            font=('맑은 고딕', 8, 'bold'),
+            activebackground=self.btn_neutral_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            padx=8,
+            pady=3,
+            command=lambda slot_key=slot: self.show_slot_raw_popup(slot_key),
+        )
+        view_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self._add_hover(view_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+        save_btn = tk.Button(
+            header,
+            text='텍스트 저장',
+            bg=self.btn_neutral_bg,
+            fg=self.btn_neutral_fg,
+            font=('맑은 고딕', 8, 'bold'),
+            activebackground=self.btn_neutral_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            padx=8,
+            pady=3,
+            command=lambda slot_key=slot: self.save_slot_raw_manually(slot_key),
+        )
+        save_btn.pack(side=tk.RIGHT)
+        self._add_hover(save_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+        text_wrap = tk.Frame(frame, bg=self.border_color, bd=0)
+        text_wrap.pack(fill=tk.BOTH, expand=True)
+        text_body, text_widget = self._make_dark_text(
+            text_wrap,
             height=8,
-            bg='#0c0d11',
-            fg='#c9cdd6',
+            bg=self.input_bg,
+            fg=self.input_fg,
             insertbackground='white',
             font=('Consolas', 9),
             bd=0,
             relief=tk.FLAT,
-            padx=10,
-            pady=8,
+            padx=8,
+            pady=6,
+            wrap=tk.NONE,
+            undo=True,
         )
-        self.topas_log_txt.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        text_body.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        text_widget.bind('<<Modified>>', lambda _event, slot_key=slot: self._on_raw_slot_modified(slot_key))
+
+        summary = tk.Label(
+            frame,
+            text='파싱: 0일치',
+            bg=self.card_color,
+            fg=self.fg_muted,
+            font=('맑은 고딕', 8),
+        )
+        summary.pack(anchor=tk.W, pady=(4, 0))
+        return text_widget, summary
+
+    def _on_raw_slot_modified(self, slot):
+        widget = self._get_raw_slot_widget(slot)
+        if widget is not None:
+            widget.edit_modified(False)
+        self._update_raw_slot_summary(slot)
+        self._refresh_topas_collect_button_text()
+        self._auto_select_route_from_raw()
+
+    def _get_raw_slot_widget(self, slot):
+        return self.return_raw_txt if slot == 'return' else self.departure_raw_txt
+
+    def _get_raw_slot_label(self, slot):
+        return self.return_parse_lbl if slot == 'return' else self.departure_parse_lbl
+
+    def _get_raw_text(self, slot):
+        widget = self._get_raw_slot_widget(slot)
+        if widget is None:
+            return ''
+        return widget.get('1.0', tk.END).strip()
+
+    def _set_raw_text(self, slot, text):
+        widget = self._get_raw_slot_widget(slot)
+        if widget is None:
+            return
+        widget.delete('1.0', tk.END)
+        widget.insert('1.0', text or '')
+        widget.edit_modified(False)
+        self._update_raw_slot_summary(slot)
+        self._refresh_topas_collect_button_text()
+        self._auto_select_route_from_raw()
+
+    def _update_raw_slot_summary(self, slot):
+        text = self._get_raw_text(slot)
+        label = self._get_raw_slot_label(slot)
+        if label is None:
+            return
+        parsed = parse_topas_text(text) if text else None
+        if not parsed:
+            label.config(text='파싱: 0일치', fg=self.fg_muted)
+            return
+        color = self.accent_green if parsed.records else self.accent_orange
+        suffix = ''
+        if parsed.warnings:
+            suffix = f' · 경고 {len(parsed.warnings)}'
+        label.config(text=f'파싱: {summarize_records(parsed)}{suffix}', fg=color)
+
+    def _slot_display_name(self, slot):
+        return '귀국편' if slot == 'return' else '출발편'
+
+    def _next_topas_target_slot(self):
+        if not self._get_raw_text('departure'):
+            return 'departure'
+        if not self._get_raw_text('return'):
+            return 'return'
+        return None
+
+    def _refresh_topas_collect_button_text(self):
+        if not hasattr(self, 'topas_query_btn'):
+            return
+        slot = self._next_topas_target_slot()
+        if slot is None:
+            text = 'AC1 자동반복 (새로조회하기)'
+        else:
+            text = 'AC1 자동반복'
+        try:
+            self.topas_query_btn.config(text=text)
+        except Exception:
+            pass
+
+    def _prepare_next_topas_target_slot(self):
+        slot = self._next_topas_target_slot()
+        if slot is not None:
+            return slot
+
+        if not messagebox.askyesno(
+            '새로 조회하기',
+            '출발편과 귀국편 조회내용이 모두 있습니다.\n\n'
+            '새로 조회를 시작할까요?\n'
+            '기존 조회내용을 모두 비우고 이번 조회를 출발편에 넣습니다.',
+        ):
+            return None
+
+        self._reset_topas_query_state()
+        self.route_user_modified = False
+        return 'departure'
+
+    def _reset_topas_query_state(self):
+        self._set_raw_text('departure', '')
+        self._set_raw_text('return', '')
+        self.topas_results_raw = []
+        self.v5_calculation_result = None
+        self.selected_result_night = None
+        self.last_topas_backup_paths = []
+        if hasattr(self, 'results_notebook'):
+            for tab_id in self.results_notebook.tabs():
+                self.results_notebook.forget(tab_id)
+        if hasattr(self, 'result_summary_lbl'):
+            self.result_summary_lbl.config(text='요금 조회 전', fg=self.fg_muted)
+        if hasattr(self, 'route_var'):
+            self.route_var.set('')
+            self._refresh_route_combo_values('')
+        self._append_topas_log('[새로조회] 기존 조회내용과 계산 결과를 초기화했습니다.\n')
+
+    def _on_route_search_keyrelease(self, event=None):
+        ignored_keys = {
+            'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'Prior', 'Next',
+            'Tab', 'Escape', 'Return', 'KP_Enter',
+            'Shift_L', 'Shift_R', 'Control_L', 'Control_R', 'Alt_L', 'Alt_R',
+            'Caps_Lock',
+        }
+        if event is not None and event.keysym in ignored_keys:
+            return
+        self.route_user_modified = True
+        self._refresh_route_combo_values(self.route_var.get())
+
+    def _on_route_selected(self, _event=None):
+        self.route_user_modified = True
+        self._refresh_route_combo_values('')
+
+    def _commit_route_search(self, _event=None):
+        self._resolve_route_input(show_warning=False)
+        return 'break'
+
+    def _refresh_route_combo_values(self, query=''):
+        if not hasattr(self, 'route_combo'):
+            return []
+        values = filter_routes(self.fare_routes, query, limit=80)
+        try:
+            self.route_combo['values'] = values
+        except Exception:
+            pass
+        return values
+
+    def _auto_select_route_from_raw(self, force=False):
+        if not self.fare_routes:
+            return
+        if self.route_user_modified and not force:
+            return
+
+        inference = infer_route_from_topas_text(
+            self._get_raw_text('departure'),
+            self._get_raw_text('return'),
+            self.fare_routes,
+            year_hint=datetime.now().year,
+        )
+        if not inference.route:
+            return
+
+        if self.route_var.get().strip() != inference.route:
+            self.route_var.set(inference.route)
+            self._refresh_route_combo_values('')
+            self._append_topas_log(f'[노선 자동 선택] {inference.route} ({inference.reason})\n')
+
+    def _resolve_route_input(self, show_warning=True):
+        query = self.route_var.get().strip()
+        if query in self.fare_routes:
+            self.route_user_modified = True
+            self._refresh_route_combo_values('')
+            return query
+
+        matches = filter_routes(self.fare_routes, query, limit=None)
+        if len(matches) == 1:
+            self.route_var.set(matches[0])
+            self.route_user_modified = True
+            self._refresh_route_combo_values('')
+            return matches[0]
+
+        if show_warning:
+            if matches:
+                sample = '\n'.join(matches[:10])
+                more = '' if len(matches) <= 10 else f'\n... 외 {len(matches) - 10}건'
+                messagebox.showwarning(
+                    '노선 확인',
+                    f'노선 후보가 {len(matches)}개입니다. 더 구체적으로 입력해 주세요.\n\n{sample}{more}',
+                )
+            else:
+                messagebox.showwarning('노선 확인', '입력한 조건과 맞는 노선을 찾지 못했습니다.')
+        return None
+
+    def show_slot_raw_popup(self, slot):
+        text = self._get_raw_text(slot)
+        if not text:
+            messagebox.showwarning('조회내용 없음', '표시할 TOPAS 조회내용이 없습니다.')
+            return
+        self.show_topas_results_popup([text], 0, stopped=False)
+
+    def save_slot_raw_manually(self, slot):
+        text = self._get_raw_text(slot)
+        if not text:
+            messagebox.showwarning('조회내용 없음', '저장할 TOPAS 조회내용이 없습니다.')
+            return
+        title = '출발편' if slot == 'departure' else '귀국편'
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.txt',
+            filetypes=[('Text Files', '*.txt'), ('All Files', '*.*')],
+            title=f'{title} 텍스트 저장',
+            initialfile=f'topas_{slot}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt',
+        )
+        if not file_path:
+            return
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        self._append_topas_log(f'[저장] {title} 텍스트 저장: {file_path}\n')
+
+    def _resolve_app_path(self, path_value):
+        path_text = str(path_value or '').strip()
+        if not path_text:
+            return get_app_dir()
+        if os.path.isabs(path_text):
+            return path_text
+        return os.path.join(get_app_dir(), path_text)
+
+    def _selected_nights(self):
+        selected = []
+        for night, var in sorted(self.night_vars.items()):
+            try:
+                if var.get():
+                    selected.append(int(night))
+            except Exception:
+                pass
+        return sorted(set(n for n in selected if 1 <= n <= 30))
+
+    def _select_only_night(self, target_night):
+        keep_selected = False
+        try:
+            keep_selected = bool(self.night_vars[target_night].get())
+        except Exception:
+            pass
+        if not keep_selected:
+            return
+        for night, var in self.night_vars.items():
+            if night != target_night:
+                try:
+                    var.set(False)
+                except Exception:
+                    pass
+        self._refresh_night_chips()
+        self._request_recalculate_after_night_change()
+
+    def _set_single_night(self, target_night):
+        for night, var in self.night_vars.items():
+            try:
+                var.set(night == target_night)
+            except Exception:
+                pass
+        self._refresh_night_chips()
+
+    def _make_night_chip(self, night):
+        """박수 선택 칩 버튼 생성 (단일 선택, 선택 시 파란 칩)."""
+        btn = tk.Button(
+            self.night_chip_frame,
+            text=f'{night}박',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            font=('맑은 고딕', 9, 'bold'),
+            padx=12,
+            pady=4,
+            bg=self.btn_neutral_bg,
+            fg=self.fg_muted,
+            activebackground=self.accent_color,
+            activeforeground='white',
+            command=lambda n=night: self._on_night_chip_click(n),
+        )
+        btn.pack(side=tk.LEFT, padx=(6, 0))
+        self.night_chip_buttons[night] = btn
+        self._refresh_night_chips()
+        return btn
+
+    def _on_night_chip_click(self, night):
+        var = self.night_vars.get(night)
+        if var is None:
+            return
+        try:
+            var.set(not bool(var.get()))
+        except Exception:
+            return
+        self._select_only_night(night)
+        self._refresh_night_chips()
+
+    def _refresh_night_chips(self):
+        for night, btn in getattr(self, 'night_chip_buttons', {}).items():
+            try:
+                selected = bool(self.night_vars[night].get())
+            except Exception:
+                selected = False
+            try:
+                btn.config(
+                    bg=self.accent_color if selected else self.btn_neutral_bg,
+                    fg='white' if selected else self.fg_muted,
+                )
+            except Exception:
+                pass
+
+    def _request_recalculate_after_night_change(self):
+        if not getattr(self, 'v5_calculation_result', None):
+            return
+        if getattr(self, '_night_auto_recalc_busy', False):
+            return
+        self._night_auto_recalc_busy = True
+        try:
+            self.root.after_idle(self._run_night_auto_recalculate)
+        except Exception:
+            self._run_night_auto_recalculate()
+
+    def _run_night_auto_recalculate(self):
+        try:
+            self.calculate_topas_fares(auto=True)
+        finally:
+            self._night_auto_recalc_busy = False
+
+    def add_custom_night_chip(self):
+        raw = self.custom_night_var.get().strip()
+        try:
+            night = int(raw)
+        except ValueError:
+            messagebox.showwarning('박수 입력', '박수는 숫자로 입력해 주세요.')
+            return
+        if not 1 <= night <= 30:
+            messagebox.showwarning('박수 입력', '박수는 1~30 사이로 입력해 주세요.')
+            return
+        if night in self.night_vars:
+            self._set_single_night(night)
+            self.custom_night_var.set('')
+            self._request_recalculate_after_night_change()
+            return
+
+        var = tk.BooleanVar(value=True)
+        self.night_vars[night] = var
+        self._make_night_chip(night)
+        self._set_single_night(night)
+        self.custom_night_var.set('')
+        self._request_recalculate_after_night_change()
+
+    def refresh_fare_snapshot(self):
+        if hasattr(self, 'refresh_fare_btn'):
+            self.refresh_fare_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'fare_data_status_lbl'):
+            self.fare_data_status_lbl.config(text='운임/시즌 로드 중...', fg=self.accent_orange)
+        thread = threading.Thread(target=self._fare_snapshot_worker, daemon=True)
+        thread.start()
+
+    def _fare_snapshot_worker(self):
+        try:
+            cache_path = self._resolve_app_path(self.config.get('fare_cache_path', 'cache/fares_snapshot.json'))
+            snapshot = load_fare_snapshot(self.config, cache_path=cache_path)
+            self.root.after(0, lambda snap=snapshot: self._apply_fare_snapshot(snap, None))
+        except Exception as exc:
+            self.root.after(0, lambda err=str(exc): self._apply_fare_snapshot(None, err))
+
+    def _apply_fare_snapshot(self, snapshot, error):
+        if hasattr(self, 'refresh_fare_btn'):
+            self.refresh_fare_btn.config(state=tk.NORMAL)
+        if error:
+            if hasattr(self, 'fare_data_status_lbl'):
+                self.fare_data_status_lbl.config(text='운임/시즌 로드 실패', fg=self.accent_red)
+            self._append_topas_log(f'[운임 로드 오류] {error}\n')
+            return
+
+        self.fare_snapshot = snapshot
+        self.fare_routes = list(snapshot.routes)
+        self._refresh_route_combo_values(self.route_var.get())
+        self._auto_select_route_from_raw(force=not self.route_user_modified)
+        status = '운임/시즌 준비됨'
+        if snapshot.source == 'cache':
+            status = '운임/시즌 캐시 사용'
+        if hasattr(self, 'fare_data_status_lbl'):
+            self.fare_data_status_lbl.config(
+                text=status,
+                fg=self.accent_orange if snapshot.warning else self.accent_green,
+            )
+        if snapshot.warning:
+            self._append_topas_log(f'[운임 캐시] {snapshot.warning}\n')
+        else:
+            self._append_topas_log(f'[운임 로드] {status}\n')
+
+    def calculate_topas_fares(self, auto=False):
+        dep_text = self._get_raw_text('departure')
+        ret_text = self._get_raw_text('return')
+        nights = self._selected_nights()
+
+        if not dep_text or not ret_text:
+            messagebox.showwarning('조회내용 확인', '출발편과 귀국편 조회내용을 모두 입력해 주세요.')
+            return
+        if self.fare_snapshot is None:
+            messagebox.showwarning('운임/시즌 데이터', '운임/시즌 데이터를 먼저 불러와야 계산할 수 있습니다.')
+            return
+        route = self._resolve_route_input(show_warning=True)
+        if not route:
+            return
+        if not nights:
+            messagebox.showwarning('박수 확인', '계산할 박수를 1개 이상 선택해 주세요.')
+            return
+
+        try:
+            result = calculate_round_trips(
+                dep_text,
+                ret_text,
+                self.fare_snapshot.fares,
+                self.fare_snapshot.seasons,
+                route,
+                nights=nights,
+            )
+        except Exception as exc:
+            messagebox.showerror('요금 조회 실패', f'계산 중 오류가 발생했습니다.\n{exc}')
+            return
+
+        self.v5_calculation_result = result
+        self._render_calculation_results(result)
+        if result.warnings:
+            self._append_topas_log('[계산 경고]\n' + '\n'.join(f'- {w}' for w in result.warnings) + '\n')
+
+    def _render_calculation_results(self, result):
+        for tab_id in self.results_notebook.tabs():
+            self.results_notebook.forget(tab_id)
+
+        first_tab = None
+        self.result_trees = {}
+        for night in sorted(result.result.keys()):
+            rows = result.result[night]
+
+            tab = tk.Frame(self.results_notebook, bg=self.card_color)
+            self.results_notebook.add(tab, text=f'{night}박')
+            if first_tab is None:
+                first_tab = tab
+                self.selected_result_night = night
+
+            header = tk.Frame(tab, bg=self.card_color)
+            header.pack(fill=tk.X, pady=(4, 6))
+            tk.Label(
+                header,
+                text=f'{night}박 결과 · {len(rows)}건',
+                bg=self.card_color,
+                fg=self.fg_color,
+                font=('맑은 고딕', 9, 'bold'),
+            ).pack(side=tk.LEFT)
+            copy_btn = tk.Button(
+                header,
+                text='복사',
+                bg=self.btn_neutral_bg,
+                fg=self.btn_neutral_fg,
+                font=('맑은 고딕', 8, 'bold'),
+                activebackground=self.btn_neutral_hover,
+                activeforeground='white',
+                bd=0,
+                relief=tk.FLAT,
+                cursor='hand2',
+                padx=8,
+                pady=3,
+                command=lambda n=night: self.copy_result_tsv(n),
+            )
+            copy_btn.pack(side=tk.RIGHT)
+            self._add_hover(copy_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+            send_btn = tk.Button(
+                header,
+                text='요금수정 보내기',
+                bg=self.accent_color,
+                fg='white',
+                font=('맑은 고딕', 8, 'bold'),
+                activebackground=self.accent_hover,
+                activeforeground='white',
+                bd=0,
+                relief=tk.FLAT,
+                cursor='hand2',
+                padx=8,
+                pady=3,
+                command=lambda n=night: self.send_calculation_to_erp_sheet(n),
+            )
+            send_btn.pack(side=tk.RIGHT, padx=(0, 8))
+            self._add_hover(send_btn, self.accent_color, self.accent_hover)
+
+            excel_btn = tk.Button(
+                header,
+                text='엑셀 다운로드',
+                bg=self.btn_neutral_bg,
+                fg=self.btn_neutral_fg,
+                font=('맑은 고딕', 8, 'bold'),
+                activebackground=self.btn_neutral_hover,
+                activeforeground='white',
+                bd=0,
+                relief=tk.FLAT,
+                cursor='hand2',
+                padx=8,
+                pady=3,
+                command=self.download_calculation_excel,
+            )
+            excel_btn.pack(side=tk.RIGHT, padx=(0, 8))
+            self._add_hover(excel_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+            process_btn = tk.Button(
+                header,
+                text='계산 과정 보기',
+                bg=self.btn_neutral_bg,
+                fg=self.btn_neutral_fg,
+                font=('맑은 고딕', 8, 'bold'),
+                activebackground=self.btn_neutral_hover,
+                activeforeground='white',
+                bd=0,
+                relief=tk.FLAT,
+                cursor='hand2',
+                padx=8,
+                pady=3,
+                command=self.show_calculation_debug_popup,
+            )
+            process_btn.pack(side=tk.RIGHT, padx=(0, 8))
+            self._add_hover(process_btn, self.btn_neutral_bg, self.btn_neutral_hover)
+
+            tree = ttk.Treeview(tab, columns=('date', 'fare', 'status'), show='headings', height=8)
+            tree.heading('date', text='출발일')
+            tree.heading('fare', text='왕복요금')
+            tree.heading('status', text='상태')
+            tree.column('date', width=140, anchor=tk.CENTER)
+            tree.column('fare', width=140, anchor=tk.E)
+            tree.column('status', width=90, anchor=tk.CENTER)
+            tree.pack(fill=tk.BOTH, expand=True)
+            tree.tag_configure('even', background=self.tree_bg)
+            tree.tag_configure('odd', background=self.tree_row_alt)
+            tree.tag_configure('closed', foreground='#8a7480')
+            for idx, row in enumerate(rows):
+                fare_text = '' if row.is_closed else f'{js_round(row.total_fare):,}원'
+                status_text = '마감' if row.is_closed else ''
+                tags = ['odd' if idx % 2 else 'even']
+                if row.is_closed:
+                    tags.append('closed')
+                tree.insert('', tk.END, values=(row.dep_date, fare_text, status_text), tags=tuple(tags))
+            self.result_trees[night] = tree
+
+        self.results_notebook.bind('<<NotebookTabChanged>>', self._on_result_tab_changed)
+        if first_tab is not None:
+            self.results_notebook.select(first_tab)
+        summary_text = ', '.join(f'{night}박 {len(rows)}건' for night, rows in sorted(result.result.items())) or '계산 결과 없음'
+        self._append_topas_log('[계산 완료] ' + summary_text + '\n')
+
+    def _on_result_tab_changed(self, _event=None):
+        if not getattr(self, 'v5_calculation_result', None):
+            return
+        current = self.results_notebook.select()
+        for idx, tab_id in enumerate(self.results_notebook.tabs()):
+            if tab_id == current:
+                nights = sorted(self.v5_calculation_result.result.keys())
+                if idx < len(nights):
+                    self.selected_result_night = nights[idx]
+                break
+
+    def copy_result_tsv(self, night):
+        if not self.v5_calculation_result:
+            return
+        rows = self.v5_calculation_result.result.get(int(night), [])
+        text = results_to_tsv(rows)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()
+        self._append_topas_log(f'[복사] {night}박 결과 {len(rows)}건 TSV 복사\n')
+
+    def download_calculation_excel(self):
+        if not self.v5_calculation_result:
+            messagebox.showwarning('결과 없음', '먼저 요금 조회를 실행해 주세요.')
+            return
+        route = self.route_var.get().strip() or 'route'
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.xlsx',
+            filetypes=[('Excel Files', '*.xlsx')],
+            title='요금 조회 결과 저장',
+            initialfile=f'요금조회_{route}_{datetime.now().strftime("%Y%m%d")}.xlsx',
+        )
+        if not file_path:
+            return
+        info = {
+            '항공노선': route,
+            '운임 기준 시각': self.fare_snapshot.loaded_at if self.fare_snapshot else '',
+            '운임 데이터 출처': self.fare_snapshot.source if self.fare_snapshot else '',
+            '출발편 백업': ', '.join(self.last_topas_backup_paths),
+        }
+        export_results_to_excel(file_path, self.v5_calculation_result.result, info=info)
+        self._append_topas_log(f'[엑셀] 요금 조회 결과 저장: {file_path}\n')
+
+    def show_calculation_debug_popup(self):
+        if not self.v5_calculation_result:
+            messagebox.showwarning('결과 없음', '먼저 요금 조회를 실행해 주세요.')
+            return
+        popup = tk.Toplevel(self.root)
+        popup.title('계산 과정')
+        popup.configure(bg='#ffffff')
+        popup.geometry('980x680')
+
+        text_widget = ScrolledText(
+            popup,
+            bg='#ffffff',
+            fg='#111827',
+            insertbackground='#111827',
+            font=('Consolas', 10),
+            bd=0,
+            relief=tk.FLAT,
+            padx=12,
+            pady=12,
+            wrap=tk.NONE,
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert('1.0', self._format_calculation_debug())
+
+        footer = tk.Frame(popup, bg='#ffffff', padx=12, pady=10)
+        footer.pack(fill=tk.X)
+        tk.Button(
+            footer,
+            text='닫기',
+            width=10,
+            bg='#f3f4f6',
+            fg='#111827',
+            font=('맑은 고딕', 9, 'bold'),
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=popup.destroy,
+        ).pack(side=tk.RIGHT)
+
+    def _format_calculation_debug(self):
+        result = self.v5_calculation_result
+        lines = []
+        lines.append(f'항공노선: {self.route_var.get().strip()}')
+        if result.warnings:
+            lines.append('')
+            lines.append('[경고]')
+            lines.extend(f'- {warning}' for warning in result.warnings)
+        lines.append('')
+        lines.append('[출발편]')
+        lines.extend(self._format_one_way_debug(result.debug.dep_debug))
+        lines.append('')
+        lines.append('[귀국편]')
+        lines.extend(self._format_one_way_debug(result.debug.ret_debug))
+        lines.append('')
+        lines.append('[왕복 조합]')
+        lines.extend(self._format_round_trip_debug_by_night(result.debug.combinations))
+        return '\n'.join(lines)
+
+    def _format_round_trip_debug_by_night(self, rows):
+        grouped = {}
+        for row in rows:
+            grouped.setdefault(int(row.nights), []).append(row)
+
+        lines = []
+        if not grouped:
+            return ['계산된 왕복 조합이 없습니다.']
+
+        for index, night in enumerate(sorted(grouped.keys())):
+            if index:
+                lines.append('')
+            rows_for_night = grouped[night]
+            closed = sum(1 for row in rows_for_night if row.is_closed)
+            suffix = f' · 마감 {closed}건' if closed else ''
+            lines.append(f'[{night}박] {len(rows_for_night)}건{suffix}')
+            lines.append('출발일\t귀국일\t출발편도\t귀국편도\t왕복\t상태\t시즌')
+            for row in rows_for_night:
+                status = '마감' if row.is_closed else ''
+                lines.append(
+                    f'{row.dep_date}\t{row.ret_date}\t'
+                    f'{js_round(row.dep_fare)}\t{js_round(row.ret_fare)}\t'
+                    f'{js_round(row.total_fare)}\t{status}\t{row.dep_season}/{row.ret_season}'
+                )
+        return lines
+
+    def _format_one_way_debug(self, rows):
+        lines = ['날짜\t시즌\t가용 클래스\t선택\t편도요금\t상태']
+        for row in rows:
+            status = '마감' if row.is_closed else ''
+            fare = '' if row.is_closed else str(js_round(row.final_fare))
+            lines.append(
+                f'{row.date}\t{row.season_type}\t{",".join(row.classes)}\t'
+                f'{row.selected_class}\t{fare}\t{status}'
+            )
+        return lines
+
+    def send_calculation_to_erp_sheet(self, night=None):
+        if not self.v5_calculation_result:
+            messagebox.showwarning('결과 없음', '먼저 요금 조회를 실행해 주세요.')
+            return
+
+        nights = [night for night, rows in sorted(self.v5_calculation_result.result.items()) if rows]
+        if not nights:
+            messagebox.showwarning('결과 없음', '요금수정으로 보낼 계산 결과가 없습니다.')
+            return
+        target_night = int(night) if night is not None else self.selected_result_night
+        target_night = target_night if target_night in nights else nights[0]
+        rows = self.v5_calculation_result.result.get(target_night, [])
+        erp_rows = to_erp_rows(rows)
+        closed = len(rows) - len(erp_rows)
+        if not erp_rows:
+            messagebox.showwarning('전달 불가', f'{target_night}박 결과에 요금수정으로 보낼 수 있는 행이 없습니다.')
+            return
+        self._load_erp_rows_to_sheet(
+            erp_rows,
+            f'토파스 계산 ({self.route_var.get().strip()} · {target_night}박 · {len(erp_rows)}건)',
+        )
+        if closed:
+            messagebox.showinfo('마감 제외', f'마감 {closed}건은 ERP 입력표에서 제외했습니다.')
+
+    def _load_erp_rows_to_sheet(self, rows, source_text):
+        self.period_mode_var.set(False)
+        self.sheet.headers(SHEET_HEADERS)
+        try:
+            self.sheet.set_column_widths([100, 80, 80, 80, 80, 80, 80, 80])
+        except Exception:
+            pass
+        grid = [
+            [
+                row['date'],
+                str(row['adult_air']),
+                str(row.get('adult_hotel', '')),
+                str(row.get('adult_land', '')),
+                str(row.get('adult_tour', '')),
+                str(row.get('adult_profit', '')),
+                str(row.get('child_fare', '')),
+                str(row.get('infant_fare', '')),
+            ]
+            for row in rows
+        ]
+        self.formulas.clear()
+        self._results.clear()
+        self._clear_merge_restore_snapshot()
+        self.sheet.set_sheet_data(grid, reset_col_positions=False, reset_row_positions=True)
+        self._set_source_badge(f'출처: {source_text}')
+        self._select_main_tab('fare')
+        if not self.panel_expanded:
+            self.toggle_sheet_panel()
+        self.refresh_count()
+        self.set_status(f'{len(rows)}건을 요금수정 입력표에 불러왔습니다. 검토 후 시작하세요.', self.accent_green)
+
+    def _set_source_badge(self, text):
+        if hasattr(self, 'data_source_badge'):
+            # 빈 배지가 회색 상자로 남지 않게, 내용이 있을 때만 카드 배경을 쓴다
+            self.data_source_badge.config(
+                text=text or '',
+                bg=self.card_color if text else self.bg_color,
+            )
 
     def toggle_sheet_panel(self):
         """오른쪽 '요금 입력표' 패널을 펼치거나 접고, 창 너비를 함께 조절한다."""
@@ -1150,6 +2272,9 @@ class RpaGuiApp:
             current_data = self.sheet.get_sheet_data()
         except Exception:
             current_data = []
+
+        if not is_period and self._restore_merged_fare_source_if_unchanged(current_data):
+            return
 
         # Shift formula coordinates
         new_formulas = {}
@@ -1203,6 +2328,40 @@ class RpaGuiApp:
         self._recalc_formulas()
         self.refresh_count()
         self._load_active_into_fb()
+
+    def _normalize_sheet_rows_for_compare(self, rows, width):
+        normalized = []
+        for row in rows or []:
+            values = list(row) + [''] * max(0, width - len(row))
+            normalized.append([str(value).strip() for value in values[:width]])
+        return normalized
+
+    def _restore_merged_fare_source_if_unchanged(self, current_data):
+        if self._merged_fare_restore_data is None or self._merged_fare_merged_data is None:
+            return False
+
+        self.formulas.clear()
+        self._results.clear()
+        self.sheet.headers(["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"])
+        self.sheet.set_sheet_data(
+            [list(row) for row in self._merged_fare_restore_data],
+            reset_col_positions=True,
+            reset_row_positions=False,
+        )
+        try:
+            self.sheet.set_column_widths([100, 80, 80, 80, 80, 80, 80, 80])
+        except Exception:
+            pass
+        self._set_source_badge('요금구간 병합 전 데이터')
+        self.refresh_count()
+        self._load_active_into_fb()
+        self.set_status('요금구간 병합 전 일자별 데이터로 복원했습니다.', self.accent_green)
+        self._clear_merge_restore_snapshot()
+        return True
+
+    def _clear_merge_restore_snapshot(self):
+        self._merged_fare_restore_data = None
+        self._merged_fare_merged_data = None
 
     # ------------------------------------------------------------------
     # 그리드 조작
@@ -1696,9 +2855,108 @@ class RpaGuiApp:
             return
         self.formulas.clear()
         self._results.clear()
+        self._clear_merge_restore_snapshot()
         self.sheet.set_sheet_data([["", "", "", "", "", "", "", ""] for _ in range(INITIAL_BLANK_ROWS)], reset_col_positions=False, reset_row_positions=True)
+        self._set_source_badge('')
         self.refresh_count()
         self._load_active_into_fb()
+
+    def merge_sheet_fare_ranges(self):
+        try:
+            source_rows = self.sheet.get_sheet_data()
+        except Exception as e:
+            messagebox.showerror('요금구간 병합 실패', f'입력표를 읽는 중 오류가 발생했습니다.\n{e}')
+            return
+
+        is_period = bool(self.period_mode_var.get())
+        fare_start_col = 2 if is_period else 1
+        restore_source_rows = None if is_period else [
+            (list(row) + [''] * max(0, 8 - len(row)))[:8]
+            for row in source_rows
+            if any(str(value).strip() for value in row)
+        ]
+
+        def normalize_fare_cell(value):
+            text = '' if value is None else str(value).strip()
+            compact = text.replace(',', '')
+            if compact:
+                try:
+                    return str(int(float(compact)))
+                except ValueError:
+                    pass
+            return text
+
+        records = []
+        for row_idx, row in enumerate(source_rows, start=1):
+            row_values = list(row)
+            width = 9 if is_period else 8
+            row_values += [''] * max(0, width - len(row_values))
+            if not any(str(value).strip() for value in row_values):
+                continue
+
+            start_text = normalize_date(row_values[0])
+            end_text = normalize_date(row_values[1]) if is_period and str(row_values[1]).strip() else start_text
+            if not start_text or not end_text:
+                messagebox.showwarning('요금구간 병합', f'{row_idx}행 날짜를 확인해 주세요.')
+                return
+
+            try:
+                start_date = datetime.strptime(start_text, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_text, '%Y-%m-%d').date()
+            except ValueError:
+                messagebox.showwarning('요금구간 병합', f'{row_idx}행 날짜 형식을 확인해 주세요.')
+                return
+            if end_date < start_date:
+                messagebox.showwarning('요금구간 병합', f'{row_idx}행 종료일이 시작일보다 빠릅니다.')
+                return
+
+            fares = row_values[fare_start_col:fare_start_col + 7]
+            fare_key = tuple(normalize_fare_cell(value) for value in fares)
+            if not any(fare_key):
+                continue
+            records.append({
+                'start': start_date,
+                'end': end_date,
+                'fares': [str(value).strip() for value in fares],
+                'key': fare_key,
+            })
+
+        if not records:
+            messagebox.showwarning('요금구간 병합', '병합할 요금 데이터가 없습니다.')
+            return
+
+        records.sort(key=lambda item: (item['start'], item['end']))
+        merged = []
+        for record in records:
+            if (
+                merged
+                and merged[-1]['key'] == record['key']
+                and record['start'] == merged[-1]['end'] + timedelta(days=1)
+            ):
+                merged[-1]['end'] = record['end']
+            else:
+                merged.append(record.copy())
+
+        output_rows = [
+            [item['start'].strftime('%Y-%m-%d'), item['end'].strftime('%Y-%m-%d')] + item['fares']
+            for item in merged
+        ]
+
+        self._merged_fare_restore_data = restore_source_rows
+        self._merged_fare_merged_data = [list(row) for row in output_rows]
+        self.period_mode_var.set(True)
+        self.formulas.clear()
+        self._results.clear()
+        self.sheet.headers(["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"])
+        self.sheet.set_sheet_data(output_rows, reset_col_positions=True, reset_row_positions=True)
+        try:
+            self.sheet.set_column_widths([100, 100, 75, 75, 75, 75, 75, 70, 70])
+        except Exception:
+            pass
+        self._set_source_badge('요금구간 병합')
+        self.refresh_count()
+        self._load_active_into_fb()
+        self.set_status(f'요금구간 병합 완료: {len(records)}건 -> {len(merged)}건', self.accent_green)
 
     def import_excel_to_sheet(self):
         path = excel_loader.select_excel_file()
@@ -1714,6 +2972,7 @@ class RpaGuiApp:
             return
             
         data, is_period = data_res
+        self._clear_merge_restore_snapshot()
         
         # Set checkbox state based on excel data format
         self.period_mode_var.set(is_period)
@@ -1754,6 +3013,7 @@ class RpaGuiApp:
         self.formulas.clear()
         self._results.clear()
         self.sheet.set_sheet_data(grid, reset_col_positions=False, reset_row_positions=True)
+        self._set_source_badge('')
         # 불러온 결과를 바로 볼 수 있도록 패널을 펼친다
         if not self.panel_expanded:
             self.toggle_sheet_panel()
@@ -1977,6 +3237,10 @@ class RpaGuiApp:
             row_cells = list(r_padded)
             
             def coerce_val(col_idx, label):
+                raw_cell = row_cells[col_idx] if col_idx < len(row_cells) else None
+                raw_text = str(raw_cell).strip() if raw_cell is not None else ""
+                if not raw_text:
+                    return ""
                 val = self._coerce_fare(row_cells, col_idx)
                 if val is None:
                     return 0
@@ -2070,6 +3334,17 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     # 날짜 필터 입력 UI (동적)
     # ------------------------------------------------------------------
+    def toggle_filter_panel(self):
+        self.filter_panel_expanded = not bool(getattr(self, 'filter_panel_expanded', False))
+        if hasattr(self, 'filter_body'):
+            if self.filter_panel_expanded:
+                self.filter_body.pack(fill=tk.X, padx=4, pady=(0, 6))
+            else:
+                self.filter_body.pack_forget()
+        if hasattr(self, 'filter_toggle_btn'):
+            marker = '▾' if self.filter_panel_expanded else '▸'
+            self.filter_toggle_btn.config(text=f'{marker} 날짜 필터 (선택)')
+
     def _on_filter_mode_change(self, *args):
         try:
             if not hasattr(self, 'filter_input_container') or not hasattr(self, 'filter_tip_lbl'):
@@ -2078,7 +3353,7 @@ class RpaGuiApp:
                 widget.destroy()
 
             mode = self.filter_mode.get()
-            entry_kwargs = dict(bg=self.bg_color, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
+            entry_kwargs = dict(bg=self.input_bg, fg=self.fg_color, insertbackground='white', bd=0, relief=tk.FLAT, highlightbackground=self.border_color, highlightcolor=self.accent_color, highlightthickness=1)
 
             if mode == "ALL":
                 self.filter_tip_lbl.config(text="표에 입력된 모든 행을 실행합니다.")
@@ -2110,6 +3385,8 @@ class RpaGuiApp:
 
     def _set_filter_inputs_state(self, state):
         try:
+            if hasattr(self, 'filter_toggle_btn'):
+                self.filter_toggle_btn.config(state=state)
             if hasattr(self, 'filter_input_container'):
                 for w in self.filter_input_container.winfo_children():
                     if isinstance(w, tk.Entry):
@@ -2238,6 +3515,255 @@ class RpaGuiApp:
             return self.TOPAS_LOGIN_URL, 'TOPAS'
         return self.ERP_LOGIN_URL, 'ERP'
 
+    def _legacy_debugger_address(self):
+        return self.config.get("debugger_address", self.config.get("debuggerAddress", "127.0.0.1:9222"))
+
+    def _debug_browser_config(self, target_name):
+        normalized = str(target_name or '').upper()
+        if normalized == 'TOPAS':
+            address = self.config.get('topas_debugger_address') or self._legacy_debugger_address()
+            profile_dir = self.config.get('topas_chrome_profile_dir', 'ChromeProfile')
+            default_port = 9222
+        else:
+            address = self.config.get('erp_debugger_address') or '127.0.0.1:9223'
+            profile_dir = self.config.get('erp_chrome_profile_dir', 'ChromeProfile_ERP')
+            default_port = 9223
+
+        host, port = self._parse_debugger_address(address, default_port)
+        return {
+            'address': f'{host}:{port}',
+            'host': host,
+            'port': port,
+            'profile_dir': str(profile_dir or ('ChromeProfile' if normalized == 'TOPAS' else 'ChromeProfile_ERP')),
+        }
+
+    def _debug_browser_configs(self, target_name):
+        normalized = str(target_name or '').upper()
+        legacy = self._legacy_debugger_address()
+        configs = [self._debug_browser_config(normalized)]
+
+        if normalized == 'TOPAS':
+            fallbacks = [
+                (legacy, self.config.get('topas_chrome_profile_dir', 'ChromeProfile'), 9222),
+                (self.config.get('erp_debugger_address'), self.config.get('erp_chrome_profile_dir', 'ChromeProfile_ERP'), 9223),
+            ]
+        else:
+            fallbacks = [
+                (legacy, self.config.get('topas_chrome_profile_dir', 'ChromeProfile'), 9222),
+                (self.config.get('topas_debugger_address'), self.config.get('topas_chrome_profile_dir', 'ChromeProfile'), 9222),
+            ]
+
+        for address, profile_dir, default_port in fallbacks:
+            if not address:
+                continue
+            host, port = self._parse_debugger_address(address, default_port)
+            profile_default = 'ChromeProfile' if port == 9222 else 'ChromeProfile_ERP'
+            configs.append({
+                'address': f'{host}:{port}',
+                'host': host,
+                'port': port,
+                'profile_dir': str(profile_dir or profile_default),
+            })
+
+        unique = []
+        seen = set()
+        for config in configs:
+            if config['address'] in seen:
+                continue
+            seen.add(config['address'])
+            unique.append(config)
+        return unique
+
+    def _parse_debugger_address(self, address, default_port):
+        text = str(address or '').strip()
+        if not text:
+            return '127.0.0.1', int(default_port)
+        if ':' not in text:
+            try:
+                return '127.0.0.1', int(text)
+            except ValueError:
+                return text, int(default_port)
+        host, port_text = text.rsplit(':', 1)
+        try:
+            port = int(port_text)
+        except ValueError:
+            port = int(default_port)
+        return host or '127.0.0.1', port
+
+    def _connect_debug_browser_config(self, config):
+        options = webdriver.ChromeOptions()
+        options.add_experimental_option("debuggerAddress", config['address'])
+        return webdriver.Chrome(options=options), config
+
+    def _connect_debug_browser(self, target_name):
+        return self._connect_debug_browser_config(self._debug_browser_config(target_name))
+
+    def _selector_locator(self, selector):
+        is_xpath = str(selector or '').startswith('//') or str(selector or '').startswith('xpath=')
+        return (
+            By.XPATH if is_xpath else By.CSS_SELECTOR,
+            str(selector or '').replace('xpath=', '') if str(selector or '').startswith('xpath=') else str(selector or ''),
+        )
+
+    def _driver_has_selector_in_frames(self, driver, selector, depth=0, max_depth=4):
+        by, search_val = self._selector_locator(selector)
+        try:
+            if driver.find_elements(by, search_val):
+                return True
+        except Exception:
+            pass
+        if depth >= max_depth:
+            return False
+
+        try:
+            frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
+        except Exception:
+            frames = []
+        for frame in frames:
+            try:
+                driver.switch_to.frame(frame)
+                if self._driver_has_selector_in_frames(driver, selector, depth + 1, max_depth):
+                    return True
+            except Exception:
+                pass
+            finally:
+                try:
+                    driver.switch_to.parent_frame()
+                except Exception:
+                    pass
+        return False
+
+    def _browser_locations(self, driver):
+        locations = []
+        try:
+            original_handle = driver.current_window_handle
+        except Exception:
+            original_handle = None
+        try:
+            handles = list(driver.window_handles)
+        except Exception:
+            handles = []
+        for idx, handle in enumerate(handles, start=1):
+            try:
+                driver.switch_to.window(handle)
+                title = driver.title or '(제목 없음)'
+                url = driver.current_url or '(주소 없음)'
+                locations.append(f'{idx}. {title} - {url}')
+            except Exception:
+                continue
+        if original_handle:
+            try:
+                driver.switch_to.window(original_handle)
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+        return ' / '.join(locations) if locations else '(확인 불가)'
+
+    def _switch_to_task_window(self, driver, task_name, url_keywords=(), title_keywords=(), selector=None):
+        try:
+            original_handle = driver.current_window_handle
+        except Exception:
+            original_handle = None
+
+        try:
+            handles = list(driver.window_handles)
+        except Exception:
+            handles = []
+
+        url_keywords = tuple(str(keyword).lower() for keyword in url_keywords)
+        title_keywords = tuple(str(keyword).lower() for keyword in title_keywords)
+        matches = []
+
+        for index, handle in enumerate(handles):
+            try:
+                driver.switch_to.window(handle)
+                driver.switch_to.default_content()
+                title = driver.title or ''
+                url = driver.current_url or ''
+                title_l = title.lower()
+                url_l = url.lower()
+                score = 0
+                if selector and self._driver_has_selector_in_frames(driver, selector):
+                    score += 1000
+                if url_keywords and any(keyword in url_l for keyword in url_keywords):
+                    score += 100
+                if title_keywords and any(keyword in title_l for keyword in title_keywords):
+                    score += 50
+                if score:
+                    matches.append((score, -index, handle, title, url))
+            except Exception:
+                continue
+
+        if matches:
+            matches.sort(reverse=True)
+            score, _index, handle, title, url = matches[0]
+            driver.switch_to.window(handle)
+            driver.switch_to.default_content()
+            print(f"[브라우저 선택] {task_name}: {title or '(제목 없음)'} - {url or '(주소 없음)'}")
+            return handle
+
+        if original_handle:
+            try:
+                driver.switch_to.window(original_handle)
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+        raise RuntimeError(
+            f'{task_name} 작업에 사용할 브라우저 탭을 찾지 못했습니다.\n'
+            f'현재 연결된 브라우저: {self._browser_locations(driver)}'
+        )
+
+    def _switch_to_topas_window(self, driver):
+        handle = self._switch_to_task_window(
+            driver,
+            'TOPAS',
+            url_keywords=('topassellconnect.com', 'topas'),
+            title_keywords=('topas', 'sell connect'),
+            selector=self.TOPAS_SHELL_ROOT,
+        )
+        self._topas_window_handle = handle
+        driver.switch_to.default_content()
+        return handle
+
+    def _switch_to_erp_window(self, driver, selectors):
+        return self._switch_to_task_window(
+            driver,
+            'ERP 요금수정',
+            url_keywords=('erp.naeiltour.co.kr',),
+            title_keywords=('erp', 'mclick', 'naeiltour'),
+            selector=selectors.get('search_date_input') if selectors else None,
+        )
+
+    def _connect_matching_debug_browser(self, target_name, selectors=None):
+        normalized = str(target_name or '').upper()
+        errors = []
+        for config in self._debug_browser_configs(normalized):
+            driver = None
+            try:
+                driver, browser_config = self._connect_debug_browser_config(config)
+                if normalized == 'TOPAS':
+                    self._switch_to_topas_window(driver)
+                else:
+                    self._switch_to_erp_window(driver, selectors or {})
+                return driver, browser_config
+            except Exception as exc:
+                errors.append(f"{config['address']}: {str(exc).splitlines()[0]}")
+                if driver is not None:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+
+        label = 'TOPAS' if normalized == 'TOPAS' else 'ERP 요금수정'
+        checked = ', '.join(config['address'] for config in self._debug_browser_configs(normalized))
+        detail = '\n'.join(f'- {error}' for error in errors) if errors else '- 연결 가능한 디버그 브라우저 없음'
+        raise RuntimeError(
+            f'{label} 작업에 사용할 브라우저 탭을 URL 기준으로 찾지 못했습니다.\n'
+            f'확인한 디버그 주소: {checked}\n'
+            f'{detail}'
+        )
+
     # ------------------------------------------------------------------
     # TOPAS 조회 제어
     # ------------------------------------------------------------------
@@ -2246,8 +3772,13 @@ class RpaGuiApp:
             messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
             return
 
+        slot = self._prepare_next_topas_target_slot()
+        if slot is None:
+            return
+
         dialog = tk.Toplevel(self.root)
-        dialog.title('토파스 조회 횟수')
+        title = self._slot_display_name(slot)
+        dialog.title(f'{title} 토파스 조회 횟수')
         dialog.configure(bg=self.bg_color)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2258,7 +3789,7 @@ class RpaGuiApp:
 
         tk.Label(
             box,
-            text='AC1 실행 횟수',
+            text=f'{title} AC1 실행 횟수',
             font=('맑은 고딕', 11, 'bold'),
             bg=self.bg_color,
             fg=self.fg_color,
@@ -2276,7 +3807,7 @@ class RpaGuiApp:
             box,
             textvariable=count_var,
             width=18,
-            bg='#0c0d11',
+            bg=self.input_bg,
             fg=self.fg_color,
             insertbackground='white',
             relief=tk.FLAT,
@@ -2319,7 +3850,7 @@ class RpaGuiApp:
             dialog.grab_release()
             dialog.destroy()
             batch_size = self._int_config('topas_batch_size', 10, 10, 10)
-            self.start_topas_query(count, batch_size)
+            self.start_topas_query(count, batch_size, slot=slot)
 
         run_btn = tk.Button(
             buttons,
@@ -2362,7 +3893,7 @@ class RpaGuiApp:
         y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - 180) // 2)
         dialog.geometry(f'+{x}+{y}')
 
-    def start_topas_query(self, count, batch_size=1):
+    def start_topas_query(self, count, batch_size=1, slot='departure'):
         if self.is_running:
             messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
             return
@@ -2370,9 +3901,11 @@ class RpaGuiApp:
         self.is_running = True
         self.topas_stop_requested = False
         self.topas_results_raw = []
+        self.topas_target_slot = slot
         self._topas_reset_element_cache()
 
-        self.topas_query_btn.config(state=tk.DISABLED)
+        for btn in getattr(self, 'topas_query_buttons', [self.topas_query_btn]):
+            btn.config(state=tk.DISABLED)
         self.topas_stop_btn.config(state=tk.NORMAL)
         self.start_btn.config(state=tk.DISABLED)
         self.pause_btn.config(state=tk.DISABLED)
@@ -2382,8 +3915,10 @@ class RpaGuiApp:
         self.topas_progress_bar['maximum'] = count
         self.topas_progress_bar['value'] = 0
         self.topas_progress_lbl.config(text=f'0 / {count} (0%)')
-        self._set_topas_status('TOPAS 연결 준비 중', self.accent_orange)
-        self.topas_log_txt.delete('1.0', tk.END)
+        target = '출발편' if slot == 'departure' else '귀국편'
+        self._set_topas_status(f'{target} TOPAS 연결 준비 중', self.accent_orange)
+        if hasattr(self, 'topas_log_txt'):
+            self.topas_log_txt.delete('1.0', tk.END)
         if batch_size > 1:
             self._append_topas_log(f'[묶음 전송] AC1을 {batch_size}건씩 전송합니다.\n')
 
@@ -2407,19 +3942,22 @@ class RpaGuiApp:
 
         try:
             self.root.after(0, lambda: self._append_topas_log('[TOPAS] 디버그 브라우저 연결 중...\n'))
-            options = webdriver.ChromeOptions()
-            debug_addr = self.config.get("debugger_address", self.config.get("debuggerAddress", "127.0.0.1:9222"))
-            options.add_experimental_option("debuggerAddress", debug_addr)
-            driver = webdriver.Chrome(options=options)
-            self.driver = driver
             self._topas_reset_element_cache()
+            driver, browser_config = self._connect_matching_debug_browser('TOPAS')
+            self.driver = driver
+            self.root.after(
+                0,
+                lambda addr=browser_config['address']: self._append_topas_log(
+                    f'[TOPAS] Entry 브라우저 탭을 확인했습니다. ({addr})\n'
+                ),
+            )
 
             first_block = self._topas_get_latest_block(driver)
             if first_block is None:
                 if not self._topas_has_entry_shell(driver):
                     location = self._topas_debug_location(driver)
                     raise RuntimeError(
-                        '디버그 브라우저(127.0.0.1:9222)에서 TOPAS Entry 화면을 찾지 못했습니다.\n'
+                        f"디버그 브라우저({browser_config['address']})에서 TOPAS Entry 화면을 찾지 못했습니다.\n"
                         'TOPAS 조회 탭에서 [브라우저 켜기]로 TOPAS를 연 뒤 로그인하고 첫 날짜 조회까지 실행해 주세요.\n'
                         f'현재 연결된 브라우저: {location}'
                     )
@@ -2719,12 +4257,18 @@ class RpaGuiApp:
         except Exception:
             original_handle = None
 
-        for handle in list(driver.window_handles):
+        handles = list(driver.window_handles)
+        preferred_handle = getattr(self, '_topas_window_handle', None)
+        if preferred_handle in handles:
+            handles = [preferred_handle]
+
+        for handle in handles:
             try:
                 driver.switch_to.window(handle)
                 driver.switch_to.default_content()
                 found = self._topas_find_element_in_frames(driver, selector)
                 if found is not None:
+                    self._topas_window_handle = handle
                     return found
             except Exception:
                 continue
@@ -2766,12 +4310,18 @@ class RpaGuiApp:
         except Exception:
             original_handle = None
 
-        for handle in list(driver.window_handles):
+        handles = list(driver.window_handles)
+        preferred_handle = getattr(self, '_topas_window_handle', None)
+        if preferred_handle in handles:
+            handles = [preferred_handle]
+
+        for handle in handles:
             try:
                 driver.switch_to.window(handle)
                 driver.switch_to.default_content()
                 found = self._topas_find_interactable_element_in_frames(driver, selector)
                 if found is not None:
+                    self._topas_window_handle = handle
                     return found
             except Exception:
                 continue
@@ -2858,20 +4408,7 @@ class RpaGuiApp:
         return text[:limit] if text else '(빈 화면)'
 
     def _topas_debug_location(self, driver):
-        locations = []
-        try:
-            handles = list(driver.window_handles)
-        except Exception:
-            handles = []
-        for idx, handle in enumerate(handles, start=1):
-            try:
-                driver.switch_to.window(handle)
-                title = driver.title or '(제목 없음)'
-                url = driver.current_url or '(주소 없음)'
-                locations.append(f'{idx}. {title} - {url}')
-            except Exception:
-                continue
-        return ' / '.join(locations) if locations else '(확인 불가)'
+        return self._browser_locations(driver)
 
     def _topas_prompt_is_idle(self, driver):
         try:
@@ -2894,7 +4431,7 @@ class RpaGuiApp:
             self._set_topas_status('조회 오류', self.accent_red)
             messagebox.showerror('TOPAS 조회 오류', error_message)
             if results:
-                self.show_topas_results_popup(results, elapsed, stopped=True)
+                self._apply_topas_results_to_slot(results, stopped=True)
             return
 
         if stopped:
@@ -2905,17 +4442,37 @@ class RpaGuiApp:
             self._append_topas_log(f'[조회 완료] {len(results)}개 원문을 보관했습니다. 총 {elapsed:.1f}s\n')
 
         if results:
-            self.show_topas_results_popup(results, elapsed, stopped=stopped)
+            self._apply_topas_results_to_slot(results, stopped=stopped)
 
     def clean_up_ui_after_topas(self):
         self.is_running = False
         self.topas_stop_requested = False
-        self.topas_query_btn.config(state=tk.NORMAL)
+        for btn in getattr(self, 'topas_query_buttons', [self.topas_query_btn]):
+            btn.config(state=tk.NORMAL)
         self.topas_stop_btn.config(state=tk.DISABLED, text='■  중지')
         self.start_btn.config(state=tk.NORMAL)
         self.pause_btn.config(state=tk.DISABLED, text='‖  일시 중지', bg=self.accent_orange)
         self.stop_btn.config(state=tk.DISABLED, text='■  중지')
         self._set_inputs_locked(False)
+
+    def _apply_topas_results_to_slot(self, results, stopped=False):
+        slot = getattr(self, 'topas_target_slot', 'departure')
+        raw_text = join_raw_blocks(results)
+        self._set_raw_text(slot, raw_text)
+
+        direction = 'departure' if slot == 'departure' else 'return'
+        route = self.route_var.get().strip() or 'UNKNOWN'
+        raw_dir = self._resolve_app_path(self.config.get('topas_raw_dir', 'logs/topas_raw'))
+        try:
+            backup = save_raw_backup(results, raw_dir, route=route, direction=direction)
+            self.last_topas_backup_paths.append(str(backup.path))
+            self._append_topas_log(f'[백업] {backup.path}\n')
+        except Exception as exc:
+            self._append_topas_log(f'[백업 오류] {exc}\n')
+
+        label = '출발편' if slot == 'departure' else '귀국편'
+        suffix = '부분 ' if stopped else ''
+        self._append_topas_log(f'[슬롯 반영] {label}에 {suffix}조회내용 {len(results)}개를 넣었습니다.\n')
 
     def show_topas_results_popup(self, results, elapsed, stopped=False):
         title = 'TOPAS 조회 결과'
@@ -2933,7 +4490,7 @@ class RpaGuiApp:
         status = '부분 결과' if stopped else '전체 결과'
         tk.Label(
             header,
-            text=f'{status} · 원문 {len(results)}개 · {elapsed:.1f}s',
+            text=f'{status} · 조회내용 {len(results)}개 · {elapsed:.1f}s',
             font=('맑은 고딕', 11, 'bold'),
             bg=popup_bg,
             fg=popup_fg,
@@ -2967,7 +4524,7 @@ class RpaGuiApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(result_text)
             self.root.update()
-            self._append_topas_log('[복사] TOPAS 조회 원문 전체를 클립보드에 복사했습니다.\n')
+            self._append_topas_log('[복사] TOPAS 조회내용 전체를 클립보드에 복사했습니다.\n')
 
         copy_btn = tk.Button(
             footer,
@@ -3017,8 +4574,7 @@ class RpaGuiApp:
     # ERP 제어 (gui.py의 검증된 로직 그대로)
     # ------------------------------------------------------------------
     def find_and_switch_frame(self, selector):
-        by = By.XPATH if selector.startswith('//') or selector.startswith('xpath=') else By.CSS_SELECTOR
-        search_val = selector.replace('xpath=', '') if selector.startswith('xpath=') else selector
+        by, search_val = self._selector_locator(selector)
 
         try:
             self.driver.switch_to.default_content()
@@ -3308,23 +4864,36 @@ class RpaGuiApp:
             return
 
         target_url, target_name = self._get_debug_browser_target()
+        browser_config = self._debug_browser_config(target_name)
         self.chrome_launch_btn.config(state=tk.DISABLED, text='여는 중…')
         if target_name == 'TOPAS':
-            self._set_topas_status('TOPAS 브라우저를 여는 중입니다…', self.accent_orange)
+            self._set_topas_status(f"TOPAS 브라우저를 여는 중입니다… ({browser_config['address']})", self.accent_orange)
         else:
-            self.set_status('ERP 브라우저를 여는 중입니다…', self.accent_orange)
+            self.set_status(f"ERP 브라우저를 여는 중입니다… ({browser_config['address']})", self.accent_orange)
         self.root.update_idletasks()
 
         def _restore():
             self.chrome_launch_btn.config(state=tk.NORMAL, text='브라우저 켜기')
             if target_name == 'TOPAS':
-                self._set_topas_status('TOPAS 브라우저 준비 완료 · 로그인 후 첫 조회를 실행하세요', self.accent_green)
+                self._set_topas_status(
+                    f"TOPAS 브라우저 준비 완료 ({browser_config['address']}) · 로그인 후 첫 조회를 실행하세요",
+                    self.accent_green,
+                )
             else:
-                self.set_status('ERP 브라우저 준비 완료 · 로그인 후 시작하세요', self.accent_green)
+                self.set_status(
+                    f"ERP 브라우저 준비 완료 ({browser_config['address']}) · 로그인 후 시작하세요",
+                    self.accent_green,
+                )
 
         try:
-            subprocess.Popen([bat_path, target_url], creationflags=subprocess.CREATE_NEW_CONSOLE)
-            print(f'[브라우저 기동] 디버깅용 크롬 브라우저 기동 명령을 전달했습니다. ({target_name})')
+            subprocess.Popen(
+                [bat_path, target_url, str(browser_config['port']), browser_config['profile_dir']],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+            print(
+                f"[브라우저 기동] 디버깅용 크롬 브라우저 기동 명령을 전달했습니다. "
+                f"({target_name}, {browser_config['address']}, {browser_config['profile_dir']})"
+            )
             self.root.after(3000, _restore)
         except Exception as e:
             print(f'[오류] 크롬 기동 실패: {str(e)}')
@@ -3341,26 +4910,12 @@ class RpaGuiApp:
         try:
             self.root.after(0, lambda: self.show_loading('ERP에 연결하고 있어요…'))
             print("[RPA 시작] Selenium 웹드라이버 연결 중...")
-            options = webdriver.ChromeOptions()
-            debug_addr = self.config.get("debugger_address", self.config.get("debuggerAddress", "127.0.0.1:9222"))
-            options.add_experimental_option("debuggerAddress", debug_addr)
+            erp_candidates = ', '.join(config['address'] for config in self._debug_browser_configs('ERP'))
+            print(f"[RPA 시작] ERP 디버그 브라우저 후보: {erp_candidates}")
 
             driver_timeout = int(self.config.get("timeout", 25))
             erp_poll_interval = self._float_config('erp_poll_interval', 0.25, 0.1, 1.0)
             erp_short_pause = self._float_config('erp_short_pause', 0.2, 0.05, 0.5)
-
-            try:
-                # Selenium Manager가 로컬 크롬 버전에 맞춰 드라이버를 자동 제어하도록 서비스 오버헤드 제거
-                self.driver = webdriver.Chrome(options=options)
-            except Exception as connect_ex:
-                # except 변수는 블록 종료 시 사라지므로 메시지를 미리 캡처해 람다 기본값으로 넘긴다
-                err_text = str(connect_ex)
-                print(f"[오류] 브라우저 연결 실패: {err_text}")
-                print(" -> 크롬 브라우저가 디버깅 모드로 켜져 있는지 확인하고 모든 일반 크롬 창을 닫아주세요.")
-                self.root.after(0, lambda msg=err_text: messagebox.showerror("연결 실패", f"디버그 브라우저 연결에 실패했습니다.\n{msg}"))
-                return
-
-            self.root.after(0, self.hide_loading)
 
             selectors = self.config["selectors"]
             required_selector_keys = [
@@ -3384,8 +4939,29 @@ class RpaGuiApp:
             if missing_selector_keys:
                 err_text = "config.json selectors 누락: " + ", ".join(missing_selector_keys)
                 print(f"[오류] {err_text}")
+                self.root.after(0, self.hide_loading)
                 self.root.after(0, lambda msg=err_text: messagebox.showerror("설정 오류", msg))
                 return
+
+            try:
+                # Selenium Manager가 로컬 크롬 버전에 맞춰 드라이버를 자동 제어하도록 서비스 오버헤드 제거
+                self.driver, browser_config = self._connect_matching_debug_browser('ERP', selectors)
+                print(f"[RPA 시작] 선택된 ERP 디버그 브라우저: {browser_config['address']}")
+            except Exception as connect_ex:
+                err_text = str(connect_ex)
+                print(f"[오류] {err_text}")
+                self.root.after(0, self.hide_loading)
+                self.root.after(
+                    0,
+                    lambda msg=err_text: messagebox.showerror(
+                        "브라우저 선택 실패",
+                        f"{msg}\n\n"
+                        "요금수정 화면이 디버그 Chrome 안에 열려 있는지 확인해 주세요.",
+                    ),
+                )
+                return
+
+            self.root.after(0, self.hide_loading)
 
             total_items = len(self.fares_data)
 
@@ -3406,13 +4982,13 @@ class RpaGuiApp:
                 date_end_val = str(row.get("date_end", date_val)).strip()
                 date_log_str = f"{date_val} ~ {date_end_val}" if date_val != date_end_val else date_val
 
-                adult_air = str(row.get("adult_air", 0)).strip()
-                adult_hotel = str(row.get("adult_hotel", 0)).strip()
-                adult_land = str(row.get("adult_land", 0)).strip()
-                adult_tour = str(row.get("adult_tour", 0)).strip()
-                adult_profit = str(row.get("adult_profit", 0)).strip()
-                child_val = str(row.get("child_fare", 0)).strip()
-                infant_val = str(row.get("infant_fare", 0)).strip()
+                adult_air = str(row.get("adult_air", "")).strip()
+                adult_hotel = str(row.get("adult_hotel", "")).strip()
+                adult_land = str(row.get("adult_land", "")).strip()
+                adult_tour = str(row.get("adult_tour", "")).strip()
+                adult_profit = str(row.get("adult_profit", "")).strip()
+                child_val = str(row.get("child_fare", "")).strip()
+                infant_val = str(row.get("infant_fare", "")).strip()
 
                 print(f"\n========================================================")
                 print(f"[{index+1}/{total_items}] 대상 날짜: {date_log_str}")
@@ -3531,6 +5107,15 @@ class RpaGuiApp:
                         "child_fare_input": child_val,
                         "infant_fare_input": infant_val
                     }
+                    inputs_mapping = {
+                        key: value for key, value in inputs_mapping.items()
+                        if str(value).strip() != ""
+                    }
+                    if not inputs_mapping:
+                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값이 없습니다.")
+                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "입력할 요금값 없음"})
+                        self.update_progress_ui(index + 1, total_items)
+                        continue
 
                     # 페이지별 재시도/페이싱 설정 (서버 일시 지연 408 등 대응)
                     page_max_retries = max(1, int(self.config.get('page_max_retries', 3)))
@@ -3741,7 +5326,7 @@ def _acquire_single_instance_lock():
         import ctypes
         from ctypes import wintypes
         kernel32 = ctypes.windll.kernel32
-        mutex_name = "Global\\NaeilERPUpdaterV2Test_SingleInstance_Mutex"
+        mutex_name = "Global\\NaeilERPUpdaterV5_SingleInstance_Mutex"
         handle = kernel32.CreateMutexW(None, wintypes.BOOL(True), mutex_name)
         ERROR_ALREADY_EXISTS = 183
         if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
@@ -3765,7 +5350,7 @@ if __name__ == "__main__":
         try:
             _alert = tk.Tk()
             _alert.withdraw()
-            messagebox.showinfo("이미 실행 중", "프로그램(테스트 버전)이 이미 실행 중입니다.\n열려 있는 창을 확인해 주세요.")
+            messagebox.showinfo("이미 실행 중", "NaeilERPUpdater V5가 이미 실행 중입니다.\n열려 있는 창을 확인해 주세요.")
             _alert.destroy()
         except Exception:
             pass

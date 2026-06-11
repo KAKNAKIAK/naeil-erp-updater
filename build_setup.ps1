@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "v4.0.2"
+$Version = "v5.0.0"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleaseRoot = Join-Path $ProjectRoot "release"

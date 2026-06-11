@@ -1,10 +1,12 @@
 {
-    "version":  "v4.0.2",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.2/NaeilERPUpdater_Setup_v4.0.2.exe",
-    "sha256":  "59DA844B403A6034830121F1CEF435E9563A877041E181EC4A718A3227F71B98",
+    "version":  "v5.0.0",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.0/NaeilERPUpdater_Setup_v5.0.0.exe",
+    "sha256":  "E296D4E2C29BFBE4F46B7EE100EFE048209340AD2E7FC2C4C22E27E036ACD748",
     "notes":  [
-                  "버그 수정: TOPAS 조회 명령이 /AZE처럼 편명 없이 항공사 코드만 있는 경우 AC1 응답을 0개로 잘못 판단하던 문제를 수정했습니다.",
-                  "NO FLIGHT가 섞인 날짜도 정상 응답 블록으로 집계해 다음 묶음 진행과 결과 팝업에 포함합니다.",
-                  "편명 지정 조회(/AZE517 등)와 항공사-only 조회(/AZE)를 모두 지원하며, 묶음 응답 최대 대기 시간을 80초로 조정했습니다."
+                  "V5 정식: TOPAS 출발편/귀국편 원문 수집 후 Firestore 운임/시즌 데이터로 박수별 왕복요금을 계산하는 요금조회 워크플로우를 추가했습니다.",
+                  "요금 조회 결과에서 계산 과정 보기, 엑셀 다운로드, 요금수정 보내기를 바로 실행할 수 있도록 UI를 정리했습니다.",
+                  "항공노선 자동 선택과 유연 검색, 박수 단일 선택/자동 재조회, 요금구간 병합 및 병합 전 일자별 복원을 지원합니다.",
+                  "ERP 요금수정 전달은 항공비만 입력하고 알선수익 등 나머지 필드는 비워 둡니다.",
+                  "TOPAS/ERP 디버그 브라우저를 URL 기준으로 구분해 2개 브라우저 작업 흐름의 오연결 가능성을 줄였습니다."
               ]
 }
