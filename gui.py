@@ -1019,28 +1019,12 @@ class RpaGuiApp:
         )
         topas_card.pack(fill=tk.X, padx=6, pady=(10, 10))
 
-        tk.Label(
-            topas_card,
-            text='TOPAS 화면에서 첫 날짜 조회를 먼저 실행한 뒤 시작하세요.',
-            font=('맑은 고딕', 10, 'bold'),
-            bg=self.card_color,
-            fg=self.fg_color,
-        ).pack(anchor=tk.W)
-
-        tk.Label(
-            topas_card,
-            text='조회 시작 후 현재 Entry 화면의 마지막 조회 원문부터 보관하고, 입력한 횟수만큼 AC1을 실행합니다.',
-            font=('맑은 고딕', 9),
-            bg=self.card_color,
-            fg=self.fg_muted,
-        ).pack(anchor=tk.W, pady=(4, 10))
-
         topas_actions = tk.Frame(topas_card, bg=self.card_color)
         topas_actions.pack(fill=tk.X)
 
         self.topas_query_btn = tk.Button(
             topas_actions,
-            text='토파스 조회하기',
+            text='AC1 연속조회 시작',
             width=18,
             height=2,
             bg=self.accent_green,
