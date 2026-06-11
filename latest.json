@@ -1,10 +1,10 @@
 {
-    "version":  "v4.0.0",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.0/NaeilERPUpdater_Setup_v4.0.0.exe",
-    "sha256":  "7BCE968C266CA6D75349C27394117B0FF5A0D0D416AEE74733563947B2878914",
+    "version":  "v4.0.1",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v4.0.1/NaeilERPUpdater_Setup_v4.0.1.exe",
+    "sha256":  "940485BCE0C0344E13D5C486105184CE5FE84FC425A5D8E49B8CAF3B8E25770F",
     "notes":  [
-                  "요금수정과 토파스조회 탭을 분리했습니다.",
-                  "TOPAS 첫 조회 후 AC1을 10개씩 묶어 자동 조회하고, 전체 원문 결과를 복사 가능한 팝업으로 제공합니다.",
-                  "기존 요금수정 엑셀 양식과 직접입력 방식은 그대로 유지됩니다."
+                  "버그 수정: TOPAS Entry 화면에서 AC1 입력창이 비활성/숨김 상태로 잡혀 조회가 중단되던 문제를 수정했습니다.",
+                  "AC1 전송 전 실제 입력 가능한 프롬프트인지 확인하고, 실패 시 다시 포커스/클릭 후 재시도합니다.",
+                  "TOPAS 입력 실패 시 긴 Selenium 오류 대신 원인을 알아보기 쉬운 안내 메시지로 표시합니다."
               ]
 }

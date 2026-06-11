@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Naeil Tour ERP 요금 업데이트 RPA — v4.0.0
+Naeil Tour ERP 요금 업데이트 RPA — v4.0.1
 
 주요 기능:
   - 앱에 내장된 스프레드시트(셀) 그리드에 요금 직접 입력/수정.
@@ -26,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
@@ -40,7 +41,7 @@ import excel_loader
 import update_client
 from topas.availability import parse_availability_text
 
-APP_VERSION = "v4.0.0"
+APP_VERSION = "v4.0.1"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -2487,25 +2488,79 @@ class RpaGuiApp:
         self._topas_send_ac1_batch(driver, 1)
 
     def _topas_send_ac1_batch(self, driver, count):
-        prompt = self._topas_find_prompt_input(driver)
-        if prompt is None:
-            raise RuntimeError('TOPAS 명령 입력창을 찾지 못했습니다. Entry 화면이 열려 있는지 확인해 주세요.')
-        try:
-            driver.execute_script('arguments[0].focus(); arguments[0].value = "";', prompt)
-            keys = []
-            for _ in range(max(1, int(count))):
-                keys.extend(('AC1', Keys.ENTER))
-            prompt.send_keys(*keys)
-        except Exception:
-            self._topas_prompt_el = None
-            prompt = self._topas_find_prompt_input(driver)
+        count = max(1, int(count))
+        keys = self._topas_build_ac1_keys(count)
+        last_error = None
+
+        for attempt in range(3):
+            prompt = self._topas_wait_prompt_input(driver, timeout=5 if attempt == 0 else 2)
             if prompt is None:
-                raise
-            driver.execute_script('arguments[0].focus(); arguments[0].value = "";', prompt)
-            keys = []
-            for _ in range(max(1, int(count))):
-                keys.extend(('AC1', Keys.ENTER))
-            prompt.send_keys(*keys)
+                last_error = RuntimeError('TOPAS 명령 입력창을 찾지 못했습니다.')
+                continue
+
+            try:
+                self._topas_prepare_prompt_input(driver, prompt)
+                prompt.send_keys(*keys)
+                return
+            except Exception as exc:
+                last_error = exc
+                self._topas_prompt_el = None
+
+            try:
+                prompt = self._topas_wait_prompt_input(driver, timeout=2)
+                if prompt is None:
+                    continue
+                self._topas_prepare_prompt_input(driver, prompt)
+                actions = ActionChains(driver)
+                actions.move_to_element(prompt).click()
+                for _ in range(count):
+                    actions.send_keys('AC1').send_keys(Keys.ENTER)
+                actions.perform()
+                return
+            except Exception as exc:
+                last_error = exc
+                self._topas_prompt_el = None
+                time.sleep(0.2)
+
+        detail = str(last_error).splitlines()[0] if last_error else '입력창 준비 실패'
+        raise RuntimeError(
+            'TOPAS 명령 입력창이 현재 입력 가능한 상태가 아닙니다. '
+            'Entry 화면 로딩이 끝났는지 확인하거나, TOPAS 화면을 한 번 클릭한 뒤 다시 실행해 주세요. '
+            f'원인: {detail}'
+        )
+
+    def _topas_build_ac1_keys(self, count):
+        keys = []
+        for _ in range(max(1, int(count))):
+            keys.extend(('AC1', Keys.ENTER))
+        return keys
+
+    def _topas_prepare_prompt_input(self, driver, prompt):
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            el.scrollIntoView({block: 'center', inline: 'center'});
+            el.focus();
+            el.value = '';
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            """,
+            prompt,
+        )
+        try:
+            prompt.click()
+        except Exception:
+            pass
+        time.sleep(0.05)
+
+    def _topas_wait_prompt_input(self, driver, timeout=8):
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            prompt = self._topas_find_prompt_input(driver)
+            if prompt is not None:
+                return prompt
+            self._topas_prompt_el = None
+            time.sleep(0.1)
+        return None
 
     def _topas_wait_next_block(self, driver, previous_block, timeout=None):
         return self._topas_wait_next_blocks(driver, previous_block, 1, timeout=timeout)[0]
@@ -2632,7 +2687,14 @@ class RpaGuiApp:
         return self._topas_get_cached_element(driver, '_topas_shell_el', self.TOPAS_SHELL_ROOT)
 
     def _topas_find_prompt_input(self, driver):
-        return self._topas_get_cached_element(driver, '_topas_prompt_el', self.TOPAS_PROMPT_INPUT)
+        cached = getattr(self, '_topas_prompt_el', None)
+        if self._topas_prompt_is_interactable(driver, cached):
+            return cached
+
+        self._topas_prompt_el = None
+        found = self._topas_find_interactable_element(driver, self.TOPAS_PROMPT_INPUT)
+        self._topas_prompt_el = found
+        return found
 
     def _topas_reset_element_cache(self):
         self._topas_shell_el = None
@@ -2697,6 +2759,80 @@ class RpaGuiApp:
                 except Exception:
                     pass
         return None
+
+    def _topas_find_interactable_element(self, driver, selector):
+        try:
+            original_handle = driver.current_window_handle
+        except Exception:
+            original_handle = None
+
+        for handle in list(driver.window_handles):
+            try:
+                driver.switch_to.window(handle)
+                driver.switch_to.default_content()
+                found = self._topas_find_interactable_element_in_frames(driver, selector)
+                if found is not None:
+                    return found
+            except Exception:
+                continue
+
+        if original_handle:
+            try:
+                driver.switch_to.window(original_handle)
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+        return None
+
+    def _topas_find_interactable_element_in_frames(self, driver, selector, depth=0, max_depth=4):
+        for element in driver.find_elements(By.CSS_SELECTOR, selector):
+            if self._topas_prompt_is_interactable(driver, element):
+                return element
+        if depth >= max_depth:
+            return None
+
+        frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
+        for frame in frames:
+            try:
+                driver.switch_to.frame(frame)
+                found = self._topas_find_interactable_element_in_frames(driver, selector, depth + 1, max_depth)
+                if found is not None:
+                    return found
+            except Exception:
+                pass
+            finally:
+                try:
+                    driver.switch_to.parent_frame()
+                except Exception:
+                    pass
+        return None
+
+    def _topas_prompt_is_interactable(self, driver, prompt):
+        if prompt is None:
+            return False
+        try:
+            if not prompt.is_displayed() or not prompt.is_enabled():
+                return False
+            return bool(
+                driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    if (!el || !el.isConnected) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.pointerEvents !== 'none' &&
+                        !el.disabled &&
+                        !el.readOnly;
+                    """,
+                    prompt,
+                )
+            )
+        except Exception:
+            return False
 
     def _topas_has_entry_shell(self, driver):
         return self._topas_find_entry_shell(driver) is not None
