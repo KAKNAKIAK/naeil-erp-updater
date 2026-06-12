@@ -1,15 +1,10 @@
 {
-    "version":  "v5.0.1",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.1/NaeilERPUpdater_Setup_v5.0.1.exe",
-    "sha256":  "ECA7ACDE3F878E9A63663C7F6011D47D25143D4D5C5079DD973B602DBF931F5F",
+    "version":  "v5.0.2",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.2/NaeilERPUpdater_Setup_v5.0.2.exe",
+    "sha256":  "808D0F86EF842FE2E03CC517568E2F5F21DE8589047A13536ECA757EFC20ED60",
     "notes":  [
-                  "운임/시즌 DB 로드는 Windows 인증서 저장소 기반 urllib로 전환해 Google Drive venv 환경의 TLS 실패를 피하도록 수정했습니다.",
-                  "시작 시 운임/시즌 자동 로드는 12시간 이내 캐시를 우선 사용해 Firestore 읽기 쿼터 소모를 줄였습니다.",
-                  "요금 입력표에 항공사코드 선택값을 보존하고, 요금수정 보내기/ERP 실행 시 항공사코드를 함께 전달합니다.",
+                  "v5.0.1 빌드 중 반영된 최신 소스 상태를 기준으로 다시 빌드한 패치입니다.",
                   "TOPAS 계산 결과 중 마감으로 ERP 입력표에서 제외된 날짜를 팝업에서 확인하고 복사할 수 있습니다.",
-                  "TOPAS 귀국편 AC1 기본 반복 횟수를 출발편 실행 횟수의 110%로 자동 제안합니다.",
-                  "요금 입력표 실행취소/다시실행 범위를 수식, 행 조작, 엑셀 불러오기, 요금구간 병합, TOPAS 결과 전달까지 확장했습니다.",
-                  "요금구간 병합 시 중간에 비는 날짜를 하나의 기간으로 합치지 않고 구간을 나누며 빈 날짜를 안내합니다.",
-                  "디버그 Chrome 실행 시 이전 탭 세션 복원으로 요금조회 사이트가 자동으로 열리는 현상을 방지했습니다."
+                  "항공사코드 전달, 귀국편 AC1 110% 제안, 입력표 undo/redo 확장, 운임/시즌 DB 로드 안정화, 디버그 Chrome 이전 탭 복원 방지 수정이 포함됩니다."
               ]
 }
