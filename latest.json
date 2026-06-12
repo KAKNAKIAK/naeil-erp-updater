@@ -1,12 +1,14 @@
 {
-    "version":  "v5.0.0",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.0/NaeilERPUpdater_Setup_v5.0.0.exe",
-    "sha256":  "E296D4E2C29BFBE4F46B7EE100EFE048209340AD2E7FC2C4C22E27E036ACD748",
+    "version":  "v5.0.1",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.1/NaeilERPUpdater_Setup_v5.0.1.exe",
+    "sha256":  "3A1C2832CE62A38FABD57873E4ED4C0331BE2621AB90861F9E02D9113E2660E1",
     "notes":  [
-                  "V5 정식: TOPAS 출발편/귀국편 원문 수집 후 Firestore 운임/시즌 데이터로 박수별 왕복요금을 계산하는 요금조회 워크플로우를 추가했습니다.",
-                  "요금 조회 결과에서 계산 과정 보기, 엑셀 다운로드, 요금수정 보내기를 바로 실행할 수 있도록 UI를 정리했습니다.",
-                  "항공노선 자동 선택과 유연 검색, 박수 단일 선택/자동 재조회, 요금구간 병합 및 병합 전 일자별 복원을 지원합니다.",
-                  "ERP 요금수정 전달은 항공비만 입력하고 알선수익 등 나머지 필드는 비워 둡니다.",
-                  "TOPAS/ERP 디버그 브라우저를 URL 기준으로 구분해 2개 브라우저 작업 흐름의 오연결 가능성을 줄였습니다."
+                  "운임/시즌 DB 로드는 Windows 인증서 저장소 기반 urllib로 전환해 Google Drive venv 환경의 TLS 실패를 피하도록 수정했습니다.",
+                  "시작 시 운임/시즌 자동 로드는 12시간 이내 캐시를 우선 사용해 Firestore 읽기 쿼터 소모를 줄였습니다.",
+                  "요금 입력표에 항공사코드 선택값을 보존하고, 요금수정 보내기/ERP 실행 시 항공사코드를 함께 전달합니다.",
+                  "TOPAS 귀국편 AC1 기본 반복 횟수를 출발편 실행 횟수의 110%로 자동 제안합니다.",
+                  "요금 입력표 실행취소/다시실행 범위를 수식, 행 조작, 엑셀 불러오기, 요금구간 병합, TOPAS 결과 전달까지 확장했습니다.",
+                  "요금구간 병합 시 중간에 비는 날짜를 하나의 기간으로 합치지 않고 구간을 나누며 빈 날짜를 안내합니다.",
+                  "디버그 Chrome 실행 시 이전 탭 세션 복원으로 요금조회 사이트가 자동으로 열리는 현상을 방지했습니다."
               ]
 }

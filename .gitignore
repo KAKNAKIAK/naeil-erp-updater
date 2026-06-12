@@ -1,9 +1,11 @@
 .venv/
 ChromeProfile/
+ChromeProfile_ERP/
 release/
 build/
 dist/
 logs/
+cache/
 __pycache__/
 *.py[cod]
 *.log
@@ -11,4 +13,7 @@ __pycache__/
 *.bak
 *.spec.bak
 recovered/
-
+_diag_fare.py
+inspect_chrome.py
+chrome_inspect*.png
+site_analysis_*

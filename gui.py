@@ -13,8 +13,10 @@ import sys
 import json
 import time
 import csv
+import copy
 import ast
 import operator
+import re
 import threading
 import queue
 import shutil
@@ -47,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.0"
+APP_VERSION = "v5.0.1"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -63,6 +65,11 @@ COL_INFANT = 7
 SHEET_HEADERS = ["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아요금", "유아요금"]
 SHORT_COL_NAMES = ["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"]
 INITIAL_BLANK_ROWS = 12
+AIRLINE_EMPTY_LABEL = "_선택_"
+RETURN_AC1_SUGGEST_PERCENT = 110
+DEFAULT_AIRLINE_CHOICES = [
+    ("", AIRLINE_EMPTY_LABEL),
+]
 
 
 def get_app_dir():
@@ -285,6 +292,8 @@ class RpaGuiApp:
         self._topas_shell_el = None
         self._topas_prompt_el = None
         self._topas_window_handle = None
+        self.topas_current_ac1_count = 0
+        self.departure_ac1_count = 0
         self.current_main_tab = 'fare'
         self.main_tab_controls = {}
         self.topas_target_slot = 'departure'
@@ -293,6 +302,12 @@ class RpaGuiApp:
         self.route_var = tk.StringVar(value='')
         self.route_user_modified = False
         self.custom_night_var = tk.StringVar(value='')
+        self.airline_var = tk.StringVar(value=AIRLINE_EMPTY_LABEL)
+        self.airline_choices = []
+        self.airline_value_by_label = {}
+        self.airline_label_by_value = {}
+        self.airline_refresh_thread = None
+        self.selected_airline_code = ''
         self.night_vars = {}
         self.night_chip_buttons = {}
         self.v5_calculation_result = None
@@ -311,6 +326,11 @@ class RpaGuiApp:
         self.formulas = {}
         self._results = {}        # (row,col)->마지막 계산 결과 문자열 (수동 수정 감지용)
         self._recalc_busy = False  # 재계산 중 재진입 방지
+        self._sheet_undo_stack = []
+        self._sheet_redo_stack = []
+        self._sheet_last_snapshot = None
+        self._applying_sheet_snapshot = False
+        self._sheet_undo_limit = 80
 
         # 날짜 필터 관리 변수
         self.filter_mode = tk.StringVar(value="ALL")  # ALL, FROM_DATE, SPECIFIC, DATE_RANGE
@@ -327,11 +347,14 @@ class RpaGuiApp:
         self._loading_after_id = None
         self._loading_overlay = None
 
+        self._set_airline_choices(DEFAULT_AIRLINE_CHOICES)
         self.build_ui()
+        self._sync_sheet_undo_baseline()
         self._on_filter_mode_change()
         self._load_loading_frames()
         self.refresh_count()
         self.set_status("오른쪽 위 ‘요금직접입력하기 ▶’ 버튼으로 요금을 입력하세요", self.fg_muted)
+        self.root.after(1200, lambda: self.refresh_airline_options_from_erp(silent=True))
         self.root.after(800, self.check_for_updates_on_startup)
 
     # ------------------------------------------------------------------
@@ -346,6 +369,7 @@ class RpaGuiApp:
             'login_btn': '#btnLogin',
             'search_date_input': '#searchStDate',
             'search_date_end_input': '#searchEnDate',
+            'airline_select': '#air2Cd',
             'search_button': '#gridMain_r',
             'header_all_checkbox': 'td.aui-grid-row-check-header input',
             'update_button': '#priceUpdate',
@@ -907,6 +931,26 @@ class RpaGuiApp:
         )
         self.period_mode_cb.pack(side=tk.RIGHT, padx=(10, 0))
 
+        airline_bar = tk.Frame(sheet_card, bg=self.card_color)
+        airline_bar.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(
+            airline_bar,
+            text='항공사코드',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_color,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self.airline_combo = ttk.Combobox(
+            airline_bar,
+            textvariable=self.airline_var,
+            values=self._airline_combo_values(),
+            width=24,
+            font=('맑은 고딕', 9),
+        )
+        self.airline_combo.pack(side=tk.LEFT)
+        self.airline_combo.bind('<<ComboboxSelected>>', self._on_airline_combo_change)
+        self.airline_combo.bind('<FocusOut>', self._on_airline_combo_change)
+
         # 수식 입력줄(formula bar): '=' 식 편집 중 표의 칸을 클릭하면 참조가 삽입된다
         fb_frame = tk.Frame(sheet_card, bg=self.card_color)
         fb_frame.pack(fill=tk.X, pady=(0, 6))
@@ -1184,6 +1228,172 @@ class RpaGuiApp:
         self.toolbar_buttons.append(btn)
         return btn
 
+    def _format_airline_label(self, value, text):
+        value = '' if value is None else str(value)
+        text = '' if text is None else str(text).strip()
+        if not value:
+            return AIRLINE_EMPTY_LABEL
+        if text and text.lower() != 'null':
+            return text if text.startswith('[') else f'[{value}] {text}'
+        return f'[{value}]'
+
+    def _airline_combo_values(self):
+        return [label for _value, label in self.airline_choices]
+
+    def _set_airline_choices(self, choices):
+        current_value = self._selected_airline_code() if hasattr(self, 'airline_value_by_label') else ''
+        normalized = []
+        seen = set()
+
+        def add_choice(value, text):
+            value = '' if value is None else str(value)
+            label = self._format_airline_label(value, text)
+            key = (value, label)
+            if key in seen:
+                return
+            seen.add(key)
+            normalized.append((value, label))
+
+        add_choice('', AIRLINE_EMPTY_LABEL)
+        for value, text in choices or []:
+            add_choice(value, text)
+
+        self.airline_choices = normalized
+        self.airline_value_by_label = {label: value for value, label in normalized}
+        self.airline_label_by_value = {value: label for value, label in normalized}
+
+        if hasattr(self, 'airline_combo'):
+            self.airline_combo.config(values=self._airline_combo_values())
+        if current_value:
+            self._select_airline_code(current_value, overwrite_blank_only=False)
+        elif hasattr(self, 'airline_var'):
+            self.airline_var.set(AIRLINE_EMPTY_LABEL)
+
+    def _selected_airline_code(self):
+        text = self.airline_var.get() if hasattr(self, 'airline_var') else ''
+        text = '' if text is None else str(text).strip()
+        if not text or text == AIRLINE_EMPTY_LABEL:
+            return ''
+        mapped = self.airline_value_by_label.get(text) if hasattr(self, 'airline_value_by_label') else None
+        if mapped is not None:
+            return mapped
+        bracket_match = re.match(r'^\[([^\]]+)\]', text)
+        if bracket_match:
+            return bracket_match.group(1)
+        token = text.split()[0].strip().upper() if text.split() else ''
+        if re.fullmatch(r'[A-Z0-9]{1,3}', token):
+            return token
+        return ''
+
+    def _select_airline_code(self, code, overwrite_blank_only=True):
+        code = '' if code is None else str(code).strip().upper()
+        if overwrite_blank_only and self._selected_airline_code():
+            return
+        if not code:
+            self.airline_var.set(AIRLINE_EMPTY_LABEL)
+            return
+        self.airline_var.set(self.airline_label_by_value.get(code, code))
+
+    def _airline_code_from_route(self):
+        route = self.route_var.get().strip() if hasattr(self, 'route_var') else ''
+        if not route:
+            return ''
+        parts = [p for p in re.split(r'[^A-Za-z0-9]+', route.upper()) if p]
+        if parts and re.fullmatch(r'[A-Z0-9]{2,3}', parts[-1]):
+            return parts[-1]
+        return ''
+
+    def _on_airline_combo_change(self, event=None):
+        code = self._selected_airline_code()
+        if code and code in self.airline_label_by_value:
+            self.airline_var.set(self.airline_label_by_value[code])
+        elif not code:
+            self.airline_var.set(AIRLINE_EMPTY_LABEL)
+
+    def refresh_airline_options_from_erp(self, silent=False):
+        if getattr(self, 'airline_refresh_thread', None) and self.airline_refresh_thread.is_alive():
+            return
+        if getattr(self, 'is_running', False):
+            if not silent:
+                messagebox.showwarning('실행 중', 'ERP 실행 중에는 항공사 목록을 새로고침할 수 없습니다.')
+            return
+        if not silent:
+            self.set_status('항공사코드 목록을 읽는 중입니다…', self.accent_orange)
+        self.airline_refresh_thread = threading.Thread(target=self._airline_options_worker, args=(silent,), daemon=True)
+        self.airline_refresh_thread.start()
+
+    def _airline_options_worker(self, silent=False):
+        driver = None
+        try:
+            selectors = self.config.get('selectors', {})
+            driver, _browser_config = self._connect_matching_debug_browser('ERP', selectors)
+            options = self._read_airline_options_from_driver(driver, selectors.get('airline_select', '#air2Cd'))
+            self.root.after(0, lambda opts=options: self._apply_airline_options(opts, None, silent))
+        except Exception as exc:
+            self.root.after(0, lambda err=str(exc): self._apply_airline_options(None, err, silent))
+        finally:
+            if driver is not None:
+                try:
+                    driver.service.stop()
+                except Exception:
+                    pass
+
+    def _apply_airline_options(self, options, error, silent=False):
+        if error:
+            if not silent:
+                self.set_status('항공사코드 목록을 불러오지 못했습니다', self.accent_red)
+                messagebox.showerror('항공사 목록 새로고침 실패', error)
+            return
+        self._set_airline_choices(options)
+        count = max(0, len(self.airline_choices) - 1)
+        if not silent:
+            self.set_status(f'항공사코드 목록 {count}개를 불러왔습니다.', self.accent_green)
+
+    def _read_airline_options_from_driver(self, driver, selector):
+        if not self._switch_driver_to_frame_containing(driver, selector):
+            raise RuntimeError(f'ERP 화면에서 항공사 필드({selector})를 찾지 못했습니다.')
+        options = driver.execute_script(
+            """
+            const sel = document.querySelector(arguments[0]);
+            if (!sel) return [];
+            return Array.from(sel.options).map(o => ({
+                value: o.value || '',
+                text: (o.textContent || '').trim()
+            }));
+            """,
+            selector,
+        )
+        return [(item.get('value', ''), item.get('text', '')) for item in options or []]
+
+    def _switch_driver_to_frame_containing(self, driver, selector, depth=0, max_depth=4):
+        by, search_val = self._selector_locator(selector)
+        try:
+            if driver.find_elements(by, search_val):
+                return True
+        except Exception:
+            pass
+        if depth >= max_depth:
+            return False
+        try:
+            frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
+        except Exception:
+            frames = []
+        for frame in frames:
+            try:
+                driver.switch_to.frame(frame)
+                if self._switch_driver_to_frame_containing(driver, selector, depth + 1, max_depth):
+                    return True
+            except Exception:
+                pass
+            try:
+                driver.switch_to.parent_frame()
+            except Exception:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+        return False
+
     def _build_topas_tab(self):
         outer = tk.Frame(self.topas_tab, bg=self.bg_color)
         outer.pack(fill=tk.BOTH, expand=True, padx=6, pady=(10, 10))
@@ -1420,7 +1630,7 @@ class RpaGuiApp:
         self.results_notebook = ttk.Notebook(result_card, style='Result.TNotebook')
         self.results_notebook.pack(fill=tk.BOTH, expand=True)
 
-        self.root.after(700, self.refresh_fare_snapshot)
+        self.root.after(700, lambda: self.refresh_fare_snapshot(force=False))
 
     def _build_raw_slot(self, parent, title, slot, column):
         frame = tk.Frame(parent, bg=self.card_color)
@@ -1587,10 +1797,17 @@ class RpaGuiApp:
         self.route_user_modified = False
         return 'departure'
 
+    def _suggest_topas_ac1_count(self, slot):
+        if slot != 'return' or self.departure_ac1_count <= 0:
+            return ''
+        return str(max(1, (self.departure_ac1_count * RETURN_AC1_SUGGEST_PERCENT + 99) // 100))
+
     def _reset_topas_query_state(self):
         self._set_raw_text('departure', '')
         self._set_raw_text('return', '')
         self.topas_results_raw = []
+        self.topas_current_ac1_count = 0
+        self.departure_ac1_count = 0
         self.v5_calculation_result = None
         self.selected_result_night = None
         self.last_topas_backup_paths = []
@@ -1835,18 +2052,22 @@ class RpaGuiApp:
         self.custom_night_var.set('')
         self._request_recalculate_after_night_change()
 
-    def refresh_fare_snapshot(self):
+    def refresh_fare_snapshot(self, force=True):
         if hasattr(self, 'refresh_fare_btn'):
             self.refresh_fare_btn.config(state=tk.DISABLED)
         if hasattr(self, 'fare_data_status_lbl'):
             self.fare_data_status_lbl.config(text='운임/시즌 로드 중...', fg=self.accent_orange)
-        thread = threading.Thread(target=self._fare_snapshot_worker, daemon=True)
+        thread = threading.Thread(target=self._fare_snapshot_worker, args=(force,), daemon=True)
         thread.start()
 
-    def _fare_snapshot_worker(self):
+    def _fare_snapshot_worker(self, force=True):
         try:
             cache_path = self._resolve_app_path(self.config.get('fare_cache_path', 'cache/fares_snapshot.json'))
-            snapshot = load_fare_snapshot(self.config, cache_path=cache_path)
+            snapshot = load_fare_snapshot(
+                self.config,
+                cache_path=cache_path,
+                prefer_cache_within_hours=None if force else 12,
+            )
             self.root.after(0, lambda snap=snapshot: self._apply_fare_snapshot(snap, None))
         except Exception as exc:
             self.root.after(0, lambda err=str(exc): self._apply_fare_snapshot(None, err))
@@ -2190,14 +2411,24 @@ class RpaGuiApp:
         if not erp_rows:
             messagebox.showwarning('전달 불가', f'{target_night}박 결과에 요금수정으로 보낼 수 있는 행이 없습니다.')
             return
+        self._record_sheet_undo_state('요금수정 보내기')
+        airline_code = self._airline_code_from_route()
+        self._select_airline_code(airline_code, overwrite_blank_only=False)
+        source_text = f'토파스 계산 ({self.route_var.get().strip()} · {target_night}박 · {len(erp_rows)}건'
+        if airline_code:
+            source_text += f' · 항공사코드 {airline_code}'
+        source_text += ')'
         self._load_erp_rows_to_sheet(
             erp_rows,
-            f'토파스 계산 ({self.route_var.get().strip()} · {target_night}박 · {len(erp_rows)}건)',
+            source_text,
+            record_undo=False,
         )
         if closed:
             messagebox.showinfo('마감 제외', f'마감 {closed}건은 ERP 입력표에서 제외했습니다.')
 
-    def _load_erp_rows_to_sheet(self, rows, source_text):
+    def _load_erp_rows_to_sheet(self, rows, source_text, record_undo=True):
+        if record_undo:
+            self._record_sheet_undo_state('요금수정 보내기')
         self.period_mode_var.set(False)
         self.sheet.headers(SHEET_HEADERS)
         try:
@@ -2226,6 +2457,7 @@ class RpaGuiApp:
         if not self.panel_expanded:
             self.toggle_sheet_panel()
         self.refresh_count()
+        self._sync_sheet_undo_baseline()
         self.set_status(f'{len(rows)}건을 요금수정 입력표에 불러왔습니다. 검토 후 시작하세요.', self.accent_green)
 
     def _set_source_badge(self, text):
@@ -2272,9 +2504,12 @@ class RpaGuiApp:
             current_data = self.sheet.get_sheet_data()
         except Exception:
             current_data = []
+        undo_snapshot = self._snapshot_sheet_state(period_mode=not is_period)
 
         if not is_period and self._restore_merged_fare_source_if_unchanged(current_data):
             return
+
+        self._record_sheet_undo_state('기간 모드 전환', snapshot=undo_snapshot)
 
         # Shift formula coordinates
         new_formulas = {}
@@ -2328,6 +2563,7 @@ class RpaGuiApp:
         self._recalc_formulas()
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
 
     def _normalize_sheet_rows_for_compare(self, rows, width):
         normalized = []
@@ -2340,6 +2576,7 @@ class RpaGuiApp:
         if self._merged_fare_restore_data is None or self._merged_fare_merged_data is None:
             return False
 
+        self._record_sheet_undo_state('요금구간 병합 복원', snapshot=self._snapshot_sheet_state(period_mode=True))
         self.formulas.clear()
         self._results.clear()
         self.sheet.headers(["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"])
@@ -2357,6 +2594,7 @@ class RpaGuiApp:
         self._load_active_into_fb()
         self.set_status('요금구간 병합 전 일자별 데이터로 복원했습니다.', self.accent_green)
         self._clear_merge_restore_snapshot()
+        self._sync_sheet_undo_baseline()
         return True
 
     def _clear_merge_restore_snapshot(self):
@@ -2366,7 +2604,102 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     # 그리드 조작
     # ------------------------------------------------------------------
+    def _snapshot_sheet_state(self, period_mode=None):
+        try:
+            data = self.sheet.get_sheet_data()
+        except Exception:
+            data = []
+        try:
+            headers = list(self.sheet.headers())
+        except Exception:
+            headers = list(SHEET_HEADERS)
+        try:
+            source_text = self.data_source_badge.cget('text') if hasattr(self, 'data_source_badge') else ''
+        except Exception:
+            source_text = ''
+        return {
+            'data': copy.deepcopy(data),
+            'headers': headers,
+            'period_mode': bool(self.period_mode_var.get() if period_mode is None else period_mode),
+            'formulas': copy.deepcopy(self.formulas),
+            'results': copy.deepcopy(self._results),
+            'merged_restore': copy.deepcopy(self._merged_fare_restore_data),
+            'merged_merged': copy.deepcopy(self._merged_fare_merged_data),
+            'source_text': source_text,
+            'airline_text': self.airline_var.get() if hasattr(self, 'airline_var') else AIRLINE_EMPTY_LABEL,
+            'active_cell': tuple(self._active_cell) if hasattr(self, '_active_cell') else (0, 0),
+        }
+
+    def _same_sheet_snapshot(self, left, right):
+        return left == right
+
+    def _record_sheet_undo_state(self, label='입력표 변경', snapshot=None):
+        if self._applying_sheet_snapshot:
+            return
+        snapshot = copy.deepcopy(snapshot or self._snapshot_sheet_state())
+        if self._sheet_undo_stack and self._same_sheet_snapshot(self._sheet_undo_stack[-1], snapshot):
+            return
+        self._sheet_undo_stack.append(snapshot)
+        if len(self._sheet_undo_stack) > self._sheet_undo_limit:
+            self._sheet_undo_stack = self._sheet_undo_stack[-self._sheet_undo_limit:]
+        self._sheet_redo_stack.clear()
+
+    def _sync_sheet_undo_baseline(self):
+        if hasattr(self, 'sheet'):
+            self._sheet_last_snapshot = self._snapshot_sheet_state()
+
+    def _column_widths_for_headers(self, headers, period_mode):
+        if period_mode or (headers and str(headers[0]).strip() == '시작일'):
+            return [100, 100, 75, 75, 75, 75, 75, 70, 70]
+        return [100, 80, 80, 80, 80, 80, 80, 80]
+
+    def _restore_sheet_snapshot(self, snapshot):
+        self._applying_sheet_snapshot = True
+        try:
+            period_mode = bool(snapshot.get('period_mode', False))
+            self.period_mode_var.set(period_mode)
+            headers = list(snapshot.get('headers') or (["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"] if period_mode else SHEET_HEADERS))
+            self.sheet.headers(headers)
+            try:
+                self.sheet.set_column_widths(self._column_widths_for_headers(headers, period_mode))
+            except Exception:
+                pass
+            self.formulas = copy.deepcopy(snapshot.get('formulas') or {})
+            self._results = copy.deepcopy(snapshot.get('results') or {})
+            self._merged_fare_restore_data = copy.deepcopy(snapshot.get('merged_restore'))
+            self._merged_fare_merged_data = copy.deepcopy(snapshot.get('merged_merged'))
+            self.sheet.set_sheet_data(copy.deepcopy(snapshot.get('data') or []), reset_col_positions=True, reset_row_positions=True)
+            self._set_source_badge(snapshot.get('source_text', ''))
+            if hasattr(self, 'airline_var'):
+                self.airline_var.set(snapshot.get('airline_text') or AIRLINE_EMPTY_LABEL)
+            active = snapshot.get('active_cell') or (0, 0)
+            try:
+                self._active_cell = (max(0, int(active[0])), max(0, int(active[1])))
+            except Exception:
+                self._active_cell = (0, 0)
+            try:
+                self.sheet.select_cell(*self._active_cell, run_binding_func=False)
+            except Exception:
+                pass
+            try:
+                self.sheet.redraw()
+            except Exception:
+                pass
+        finally:
+            self._applying_sheet_snapshot = False
+        self.refresh_count()
+        self._load_active_into_fb()
+        self._sheet_last_snapshot = self._snapshot_sheet_state()
+
     def undo_sheet(self):
+        while self._sheet_undo_stack:
+            current = self._snapshot_sheet_state()
+            snapshot = self._sheet_undo_stack.pop()
+            if not self._same_sheet_snapshot(current, snapshot):
+                self._sheet_redo_stack.append(current)
+                self._restore_sheet_snapshot(snapshot)
+                self.set_status('입력표 실행취소 완료', self.accent_green)
+                return
         try:
             self.sheet.undo()
         except Exception:
@@ -2374,6 +2707,14 @@ class RpaGuiApp:
         self._on_sheet_modified()
 
     def redo_sheet(self):
+        while self._sheet_redo_stack:
+            current = self._snapshot_sheet_state()
+            snapshot = self._sheet_redo_stack.pop()
+            if not self._same_sheet_snapshot(current, snapshot):
+                self._sheet_undo_stack.append(current)
+                self._restore_sheet_snapshot(snapshot)
+                self.set_status('입력표 다시실행 완료', self.accent_green)
+                return
         try:
             self.sheet.redo()
         except Exception:
@@ -2384,8 +2725,12 @@ class RpaGuiApp:
     # 수식 엔진: 셀에는 결과 표시, 식은 self.formulas 에 보관 + 자동 재계산
     # ------------------------------------------------------------------
     def _on_sheet_modified(self, event=None):
-        if self._recalc_busy:
+        if self._recalc_busy or self._applying_sheet_snapshot:
             return
+        before = copy.deepcopy(self._sheet_last_snapshot)
+        current_before_recalc = self._snapshot_sheet_state()
+        if before is not None and not self._same_sheet_snapshot(before, current_before_recalc):
+            self._record_sheet_undo_state('셀 편집', snapshot=before)
         self._recalc_busy = True
         try:
             self._sync_formulas_from_cells()
@@ -2393,6 +2738,7 @@ class RpaGuiApp:
         finally:
             self._recalc_busy = False
         self.refresh_count()
+        self._sync_sheet_undo_baseline()
 
     def _sync_formulas_from_cells(self):
         """셀 내용을 보고 수식 보관소를 갱신한다.
@@ -2524,20 +2870,8 @@ class RpaGuiApp:
         last = self._last_data_row()
         if last < 0:
             return
-            
-        # 1. 실행 취소(Undo) 지원을 위한 변경 전 셀 값 및 수식 백업
-        undo_cells = {}
-        for i in range(last + 1):
-            try:
-                # 보관된 수식 식 문자열이 있으면 식을, 없으면 셀 값을 구함
-                old_val = self.formulas.get((i, col))
-                if old_val is None:
-                    old_val = self.sheet.get_cell_data(i, col)
-                undo_cells[(i, col)] = "" if old_val is None else str(old_val)
-            except Exception:
-                undo_cells[(i, col)] = ""
+        self._record_sheet_undo_state('수식 전체 적용')
 
-        # 2. 수식 적용 및 재계산
         for i in range(last + 1):
             self.formulas[(i, col)] = formula
             self._results.pop((i, col), None)
@@ -2547,45 +2881,9 @@ class RpaGuiApp:
         finally:
             self._recalc_busy = False
 
-        # 3. tksheet 내부 실행취소 스택에 복구 데이터 밀어넣기
-        try:
-            undo_item = {
-                'name': 'edit_table',
-                'data': {
-                    'eventname': 'edit_table',
-                    'sheetname': str(self.sheet),
-                    'cells': {
-                        'table': undo_cells,
-                        'header': {},
-                        'index': {}
-                    },
-                    'moved': {'rows': {}, 'columns': {}},
-                    'added': {'rows': {}, 'columns': {}},
-                    'deleted': {'rows': {}, 'columns': {}, 'header': {}, 'index': {}, 'column_widths': {}, 'row_heights': {}},
-                    'named_spans': {},
-                    'options': {},
-                    'selection_boxes': {},
-                    'selected': (),
-                    'being_selected': (),
-                    'data': {},
-                    'key': '',
-                    'value': None,
-                    'loc': (),
-                    'row': None,
-                    'column': None,
-                    'resized': {'rows': {}, 'columns': {}},
-                    'sheet_state': {},
-                    'treeview': {'nodes': {}, 'renamed': {}, 'text': {}}
-                }
-            }
-            self.sheet.MT.undo_stack.append(undo_item)
-            if hasattr(self.sheet.MT, 'redo_stack'):
-                self.sheet.MT.redo_stack.clear()
-        except Exception as undo_err:
-            print(f"[경고] 수식 전체적용 실행취소 등록 실패: {undo_err}")
-
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
         try:
             col_name = self.sheet.headers()[col]
         except Exception:
@@ -2781,6 +3079,7 @@ class RpaGuiApp:
     def _commit_formula_bar(self, event=None):
         r, c = self._active_cell
         text = self.fb_var.get()
+        self._record_sheet_undo_state('수식줄 입력')
         # 수식이면 보관소에 등록, 아니면 해제 (날짜 열에는 수식 등록 불가)
         if text.lstrip().startswith('=') and not self.is_date_col(c):
             self.formulas[(r, c)] = text
@@ -2810,6 +3109,7 @@ class RpaGuiApp:
             pass
         self._load_active_into_fb()
         self.refresh_count()
+        self._sync_sheet_undo_baseline()
         return 'break'
 
     def _cancel_formula_bar(self, event=None):
@@ -2822,11 +3122,13 @@ class RpaGuiApp:
         return 'break'
 
     def add_row(self):
+        self._record_sheet_undo_state('행 추가')
         data = self.sheet.get_sheet_data()
         data.append(["", "", "", "", "", "", "", ""])
         self.sheet.set_sheet_data(data, reset_col_positions=False, reset_row_positions=True)
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
 
     def delete_selected_rows(self):
         try:
@@ -2837,6 +3139,7 @@ class RpaGuiApp:
         if not rows:
             messagebox.showinfo('행 삭제', '삭제할 행을 먼저 선택해 주세요. (왼쪽 행 번호를 클릭하면 행 전체가 선택됩니다.)')
             return
+        self._record_sheet_undo_state('행 삭제')
         data = self.sheet.get_sheet_data()
         old_len = len(data)
         deleted = [r for r in rows if 0 <= r < old_len]
@@ -2849,10 +3152,12 @@ class RpaGuiApp:
         self.sheet.set_sheet_data(data, reset_col_positions=False, reset_row_positions=True)
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
 
     def clear_sheet(self):
         if not messagebox.askyesno('전체 지우기', '입력한 모든 행을 지울까요?'):
             return
+        self._record_sheet_undo_state('전체 지우기')
         self.formulas.clear()
         self._results.clear()
         self._clear_merge_restore_snapshot()
@@ -2860,6 +3165,43 @@ class RpaGuiApp:
         self._set_source_badge('')
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
+
+    @staticmethod
+    def _merge_fare_records_preserving_gaps(records):
+        sorted_records = sorted(records, key=lambda item: (item['start'], item['end']))
+        merged = []
+        gaps = []
+        coverage_end = None
+
+        for record in sorted_records:
+            if coverage_end is not None and record['start'] > coverage_end + timedelta(days=1):
+                gaps.append((coverage_end + timedelta(days=1), record['start'] - timedelta(days=1)))
+
+            if (
+                merged
+                and merged[-1]['key'] == record['key']
+                and record['start'] == merged[-1]['end'] + timedelta(days=1)
+            ):
+                merged[-1]['end'] = record['end']
+            else:
+                merged.append(record.copy())
+
+            coverage_end = record['end'] if coverage_end is None else max(coverage_end, record['end'])
+
+        return merged, gaps
+
+    @staticmethod
+    def _format_gap_summary(gaps, limit=5):
+        labels = []
+        for start, end in gaps[:limit]:
+            if start == end:
+                labels.append(start.strftime('%Y-%m-%d'))
+            else:
+                labels.append(f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}")
+        if len(gaps) > limit:
+            labels.append(f"외 {len(gaps) - limit}구간")
+        return ', '.join(labels)
 
     def merge_sheet_fare_ranges(self):
         try:
@@ -2925,23 +3267,14 @@ class RpaGuiApp:
             messagebox.showwarning('요금구간 병합', '병합할 요금 데이터가 없습니다.')
             return
 
-        records.sort(key=lambda item: (item['start'], item['end']))
-        merged = []
-        for record in records:
-            if (
-                merged
-                and merged[-1]['key'] == record['key']
-                and record['start'] == merged[-1]['end'] + timedelta(days=1)
-            ):
-                merged[-1]['end'] = record['end']
-            else:
-                merged.append(record.copy())
+        merged, gaps = self._merge_fare_records_preserving_gaps(records)
 
         output_rows = [
             [item['start'].strftime('%Y-%m-%d'), item['end'].strftime('%Y-%m-%d')] + item['fares']
             for item in merged
         ]
 
+        self._record_sheet_undo_state('요금구간 병합')
         self._merged_fare_restore_data = restore_source_rows
         self._merged_fare_merged_data = [list(row) for row in output_rows]
         self.period_mode_var.set(True)
@@ -2956,7 +3289,20 @@ class RpaGuiApp:
         self._set_source_badge('요금구간 병합')
         self.refresh_count()
         self._load_active_into_fb()
-        self.set_status(f'요금구간 병합 완료: {len(records)}건 -> {len(merged)}건', self.accent_green)
+        self._sync_sheet_undo_baseline()
+        gap_note = ''
+        if gaps:
+            gap_note = f' · 빈 날짜 {len(gaps)}구간 제외'
+        status_color = self.accent_orange if gaps else self.accent_green
+        self.set_status(f'요금구간 병합 완료: {len(records)}건 -> {len(merged)}건{gap_note}', status_color)
+        if gaps:
+            gap_summary = self._format_gap_summary(gaps)
+            messagebox.showwarning(
+                '요금구간 병합',
+                '중간에 비는 날짜가 있어 해당 날짜는 기간에 포함하지 않고 구간을 나눴습니다.\n\n'
+                f'빈 날짜: {gap_summary}\n\n'
+                '비운항/마감일이면 그대로 진행하면 됩니다.',
+            )
 
     def import_excel_to_sheet(self):
         path = excel_loader.select_excel_file()
@@ -2972,6 +3318,7 @@ class RpaGuiApp:
             return
             
         data, is_period = data_res
+        self._record_sheet_undo_state('엑셀 불러오기')
         self._clear_merge_restore_snapshot()
         
         # Set checkbox state based on excel data format
@@ -3019,6 +3366,7 @@ class RpaGuiApp:
             self.toggle_sheet_panel()
         self.refresh_count()
         self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
         self.set_status(f'엑셀에서 {len(grid)}건을 표로 불러왔습니다.', self.accent_green)
 
     def export_sheet_to_excel(self):
@@ -3411,6 +3759,10 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
+            self.airline_combo.config(state=tk.DISABLED if locked else tk.NORMAL)
+        except Exception:
+            pass
+        try:
             if locked:
                 self.sheet.disable_bindings("edit_cell", "paste", "cut", "delete", "undo")
             else:
@@ -3441,6 +3793,7 @@ class RpaGuiApp:
             messagebox.showwarning('데이터 없음', '실행할 유효한 요금 행이 없습니다.\n표 입력과 날짜 필터를 확인해 주세요.')
             return
         self.fares_data = filtered
+        self.selected_airline_code = self._selected_airline_code()
 
         self.is_running = True
         self.is_paused = False
@@ -3802,7 +4155,8 @@ class RpaGuiApp:
             fg=self.fg_muted,
         ).pack(anchor=tk.W, pady=(4, 10))
 
-        count_var = tk.StringVar(value='')
+        suggested_count = self._suggest_topas_ac1_count(slot)
+        count_var = tk.StringVar(value=suggested_count)
         count_entry = tk.Entry(
             box,
             textvariable=count_var,
@@ -3820,7 +4174,11 @@ class RpaGuiApp:
 
         tk.Label(
             box,
-            text='예: 200 입력 시 AC1을 200번 실행합니다.',
+            text=(
+                f'출발편 {self.departure_ac1_count}회 기준 10% 여유: {suggested_count}회'
+                if suggested_count
+                else '예: 200 입력 시 AC1을 200번 실행합니다.'
+            ),
             font=('맑은 고딕', 8),
             bg=self.bg_color,
             fg=self.fg_muted,
@@ -3902,6 +4260,7 @@ class RpaGuiApp:
         self.topas_stop_requested = False
         self.topas_results_raw = []
         self.topas_target_slot = slot
+        self.topas_current_ac1_count = max(1, int(count))
         self._topas_reset_element_cache()
 
         for btn in getattr(self, 'topas_query_buttons', [self.topas_query_btn]):
@@ -4473,6 +4832,18 @@ class RpaGuiApp:
         label = '출발편' if slot == 'departure' else '귀국편'
         suffix = '부분 ' if stopped else ''
         self._append_topas_log(f'[슬롯 반영] {label}에 {suffix}조회내용 {len(results)}개를 넣었습니다.\n')
+        if slot == 'departure':
+            completed_ac1 = max(0, len(results) - 1)
+            if not stopped and self.topas_current_ac1_count:
+                completed_ac1 = self.topas_current_ac1_count
+            self.departure_ac1_count = completed_ac1
+            suggested = self._suggest_topas_ac1_count('return')
+            if suggested:
+                self._append_topas_log(
+                    f'[귀국편 추천] 출발편 AC1 {completed_ac1}회 기준으로 귀국편 기본 횟수를 {suggested}회로 제안합니다.\n'
+                )
+        if slot == 'return':
+            self.topas_current_ac1_count = 0
 
     def show_topas_results_popup(self, results, elapsed, stopped=False):
         title = 'TOPAS 조회 결과'
@@ -4573,6 +4944,47 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     # ERP 제어 (gui.py의 검증된 로직 그대로)
     # ------------------------------------------------------------------
+    def _set_erp_airline_filter(self, selectors, airline_code):
+        airline_code = '' if airline_code is None else str(airline_code).strip().upper()
+        if not airline_code:
+            return None
+
+        selector = selectors.get('airline_select', '#air2Cd')
+        result = self.driver.execute_script(
+            """
+            const selector = arguments[0];
+            const value = arguments[1];
+            const sel = document.querySelector(selector);
+            if (!sel) {
+                return {ok: false, reason: 'not_found'};
+            }
+            sel.value = value;
+            const selected = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+            if (sel.value !== value) {
+                return {ok: false, reason: 'missing_option', value: sel.value || ''};
+            }
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+            try {
+                if (window.jQuery) {
+                    window.jQuery(sel).trigger('change').trigger('chosen:updated');
+                }
+            } catch (e) {}
+            return {
+                ok: true,
+                value: sel.value || '',
+                text: selected ? (selected.textContent || '').trim() : ''
+            };
+            """,
+            selector,
+            airline_code,
+        )
+        if not result or not result.get('ok'):
+            reason = result.get('reason') if isinstance(result, dict) else 'unknown'
+            if reason == 'missing_option':
+                raise RuntimeError(f"항공사코드 필드에 '{airline_code}' 코드 옵션이 없습니다.")
+            raise RuntimeError(f"항공사코드 필드({selector})를 설정하지 못했습니다.")
+        return result
+
     def find_and_switch_frame(self, selector):
         by, search_val = self._selector_locator(selector)
 
@@ -4989,6 +5401,7 @@ class RpaGuiApp:
                 adult_profit = str(row.get("adult_profit", "")).strip()
                 child_val = str(row.get("child_fare", "")).strip()
                 infant_val = str(row.get("infant_fare", "")).strip()
+                airline_code = str(row.get("airline_code") or self.selected_airline_code or "").strip().upper()
 
                 print(f"\n========================================================")
                 print(f"[{index+1}/{total_items}] 대상 날짜: {date_log_str}")
@@ -5038,6 +5451,11 @@ class RpaGuiApp:
                     if _read_end_value() != date_end_val:
                         print(f" -> [경고] 종료일이 ERP에 '{_read_end_value()}'(으)로 남아 기대값({date_end_val})과 다릅니다. "
                               f"해당 기간 일부 상품이 조회/수정에서 누락될 수 있으니 ERP에서 직접 확인해 주세요.")
+
+                    if airline_code:
+                        airline_result = self._set_erp_airline_filter(selectors, airline_code)
+                        airline_text = airline_result.get('text') or airline_code
+                        print(f" -> 항공사 필터 설정: {airline_text}")
 
                     search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
                     self.driver.execute_script("arguments[0].click();", search_btn)

@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime
 import base64
 import json
+import ssl
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -29,12 +31,27 @@ class FareSnapshot:
         return tuple(sorted({str(item.get("route", "")) for item in self.fares if item.get("route")}))
 
 
-def load_fare_snapshot(config: Mapping[str, Any] | None = None, cache_path: str | Path | None = None) -> FareSnapshot:
+def load_fare_snapshot(
+    config: Mapping[str, Any] | None = None,
+    cache_path: str | Path | None = None,
+    prefer_cache_within_hours: float | None = None,
+) -> FareSnapshot:
     config = dict(config or {})
     firestore_config = dict(config.get("firestore") or {})
     project_id = firestore_config.get("project_id") or config.get("firestore_project_id") or DEFAULT_PROJECT_ID
     api_key = firestore_config.get("api_key") or config.get("firestore_api_key") or DEFAULT_API_KEY
     cache = Path(cache_path or config.get("fare_cache_path") or "cache/fares_snapshot.json")
+
+    # 신선한 캐시가 있으면 Firestore 호출을 생략한다 (시작 시 자동 로드의 쿼터 절감용)
+    if prefer_cache_within_hours:
+        try:
+            cached = _load_cache(cache)
+        except Exception:
+            cached = None
+        if cached is not None:
+            age = _cache_age_hours(cached)
+            if age is not None and 0 <= age <= prefer_cache_within_hours:
+                return cached
 
     try:
         fares = tuple(_fetch_collection(project_id, api_key, "fares"))
@@ -76,17 +93,32 @@ def _fetch_collection(project_id: str, api_key: str, collection: str) -> list[di
             return items
 
 
-def _http_json(url: str) -> dict[str, Any]:
-    try:
-        import requests
+_SSL_CONTEXT: ssl.SSLContext | None = None
 
-        response = requests.get(url, timeout=12)
-        response.raise_for_status()
-        return response.json()
-    except ImportError:
-        req = Request(url, headers={"User-Agent": "NaeilERPUpdaterV5/1.0"})
-        with urlopen(req, timeout=12) as response:
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Windows 인증서 저장소 기반 컨텍스트를 1회만 만들어 재사용한다.
+    requests/certifi를 쓰면 venv가 구글 드라이브에 있을 때 certifi 파일 로드가
+    수십 초 걸려 TLS 핸드셰이크가 끊기므로 표준 라이브러리만 사용한다."""
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = ssl.create_default_context()
+    return _SSL_CONTEXT
+
+
+def _http_json(url: str) -> dict[str, Any]:
+    req = Request(url, headers={"User-Agent": "NaeilERPUpdaterV5/1.0"})
+    try:
+        with urlopen(req, timeout=12, context=_get_ssl_context()) as response:
             return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise RuntimeError(
+                "운임 DB 호출 한도 초과(429). Firebase 무료 일일 쿼터가 소진된 상태입니다. "
+                "한국시간 오후 4시(태평양 자정)에 초기화되며, 그 전에는 Firebase 콘솔에서 "
+                "사용량을 확인해 주세요."
+            ) from exc
+        raise
 
 
 def _decode_document(doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -144,3 +176,11 @@ def _load_cache(path: Path) -> FareSnapshot | None:
         loaded_at=payload.get("loadedAt") or payload.get("loaded_at") or "",
         source="cache",
     )
+
+
+def _cache_age_hours(snapshot: FareSnapshot) -> float | None:
+    try:
+        loaded = datetime.strptime(snapshot.loaded_at, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+    return (datetime.now() - loaded).total_seconds() / 3600.0

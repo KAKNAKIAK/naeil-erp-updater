@@ -26,6 +26,14 @@ if "%PROFILE_DIR%"=="" (
 )
 set "USER_DATA_DIR=%~dp0%PROFILE_DIR%"
 
+:: Clear previous tab/session restore data so Chrome opens only TARGET_URL.
+:: Login cookies and saved site data are kept in the profile.
+set "SESSION_DIR=%USER_DATA_DIR%\Default\Sessions"
+if exist "%SESSION_DIR%" (
+    del /q "%SESSION_DIR%\Session_*" > nul 2> nul
+    del /q "%SESSION_DIR%\Tabs_*" > nul 2> nul
+)
+
 :: 1. Verify Chrome Path
 set "CHROME_PATH=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not exist "%CHROME_PATH%" (
@@ -47,7 +55,7 @@ echo [System] Launching debugging Chrome browser...
 echo [System] Target URL: %TARGET_URL%
 echo [System] Debug Port: %DEBUG_PORT%
 echo [System] Profile Dir: %USER_DATA_DIR%
-start "" "%CHROME_PATH%" --remote-debugging-port=%DEBUG_PORT% --user-data-dir="%USER_DATA_DIR%" "%TARGET_URL%"
+start "" "%CHROME_PATH%" --remote-debugging-port=%DEBUG_PORT% --user-data-dir="%USER_DATA_DIR%" --no-first-run --no-default-browser-check --disable-session-crashed-bubble "%TARGET_URL%"
 echo [Success] Chrome launched. You may close this command window.
 timeout /t 3 > nul
 exit
