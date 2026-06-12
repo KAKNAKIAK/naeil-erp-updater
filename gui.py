@@ -2407,7 +2407,7 @@ class RpaGuiApp:
         target_night = target_night if target_night in nights else nights[0]
         rows = self.v5_calculation_result.result.get(target_night, [])
         erp_rows = to_erp_rows(rows)
-        closed = len(rows) - len(erp_rows)
+        closed_rows = [row for row in rows if row.is_closed]
         if not erp_rows:
             messagebox.showwarning('전달 불가', f'{target_night}박 결과에 요금수정으로 보낼 수 있는 행이 없습니다.')
             return
@@ -2423,8 +2423,101 @@ class RpaGuiApp:
             source_text,
             record_undo=False,
         )
-        if closed:
-            messagebox.showinfo('마감 제외', f'마감 {closed}건은 ERP 입력표에서 제외했습니다.')
+        if closed_rows:
+            self._show_closed_exclusion_popup(closed_rows, target_night)
+
+    def _closed_rows_copy_text(self, closed_rows, target_night):
+        lines = [f'{target_night}박 마감 제외 목록', '출발일\t귀국일\t박수\t상태']
+        for row in closed_rows:
+            lines.append(f'{row.dep_date}\t{row.ret_date}\t{row.nights}\t마감')
+        return '\n'.join(lines)
+
+    def _show_closed_exclusion_popup(self, closed_rows, target_night):
+        result_text = self._closed_rows_copy_text(closed_rows, target_night)
+        popup_bg = '#ffffff'
+        popup_fg = '#111827'
+        popup_border = '#d1d5db'
+
+        popup = tk.Toplevel(self.root)
+        popup.title('마감 제외')
+        popup.configure(bg=popup_bg)
+        popup.geometry('460x420')
+        popup.minsize(390, 320)
+        popup.transient(self.root)
+
+        header = tk.Frame(popup, bg=popup_bg, padx=16, pady=0)
+        header.pack(fill=tk.X, pady=(14, 8))
+        tk.Label(
+            header,
+            text=f'마감 {len(closed_rows)}건은 ERP 입력표에서 제외했습니다.',
+            font=('맑은 고딕', 10, 'bold'),
+            bg=popup_bg,
+            fg=popup_fg,
+        ).pack(anchor=tk.W)
+
+        body = tk.Frame(popup, bg=popup_border)
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 10))
+        text_widget = ScrolledText(
+            body,
+            bg=popup_bg,
+            fg=popup_fg,
+            insertbackground=popup_fg,
+            selectbackground='#bfdbfe',
+            selectforeground=popup_fg,
+            font=('Consolas', 10),
+            bd=0,
+            relief=tk.FLAT,
+            padx=10,
+            pady=8,
+            wrap=tk.NONE,
+            height=10,
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        text_widget.insert('1.0', result_text)
+        text_widget.config(state=tk.DISABLED)
+
+        footer = tk.Frame(popup, bg=popup_bg, padx=16)
+        footer.pack(fill=tk.X, pady=(0, 14))
+
+        def copy_closed_rows():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(result_text)
+            self.root.update()
+            self._append_topas_log(f'[복사] {target_night}박 마감 제외 목록 {len(closed_rows)}건 복사\n')
+
+        copy_btn = tk.Button(
+            footer,
+            text='목록 복사',
+            width=12,
+            bg=self.accent_color,
+            fg='white',
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.accent_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=copy_closed_rows,
+        )
+        copy_btn.pack(side=tk.LEFT)
+        self._add_hover(copy_btn, self.accent_color, self.accent_hover)
+
+        close_btn = tk.Button(
+            footer,
+            text='확인',
+            width=10,
+            bg='#f3f4f6',
+            fg=popup_fg,
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground='#e5e7eb',
+            activeforeground=popup_fg,
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=popup.destroy,
+        )
+        close_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._add_hover(close_btn, '#f3f4f6', '#e5e7eb', normal_fg=popup_fg, hover_fg=popup_fg)
 
     def _load_erp_rows_to_sheet(self, rows, source_text, record_undo=True):
         if record_undo:

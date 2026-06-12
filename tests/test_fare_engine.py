@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from fare.calculator import calculate_round_trips, js_round
+from fare.calculator import RoundTripResult, calculate_round_trips, js_round
 from fare.exporter import export_results_to_excel, results_to_tsv, to_erp_rows
 from fare.parser import parse_topas_text
 from gui import RpaGuiApp
@@ -136,6 +136,41 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("[4박]", text)
         self.assertNotIn("출발일\t귀국일\t박수\t", text)
         self.assertIn("출발일\t귀국일\t출발편도\t귀국편도\t왕복\t상태\t시즌", text)
+
+    def test_closed_exclusion_copy_text_lists_dates(self):
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        rows = [
+            RoundTripResult(
+                dep_date="2026-07-01",
+                ret_date="2026-07-04",
+                nights=3,
+                total_fare=0,
+                is_closed=True,
+                dep_fare=0,
+                ret_fare=0,
+            ),
+            RoundTripResult(
+                dep_date="2026-07-03",
+                ret_date="2026-07-06",
+                nights=3,
+                total_fare=0,
+                is_closed=True,
+                dep_fare=0,
+                ret_fare=0,
+            ),
+        ]
+
+        text = app._closed_rows_copy_text(rows, 3)
+
+        self.assertEqual(
+            text.splitlines(),
+            [
+                "3박 마감 제외 목록",
+                "출발일\t귀국일\t박수\t상태",
+                "2026-07-01\t2026-07-04\t3\t마감",
+                "2026-07-03\t2026-07-06\t3\t마감",
+            ],
+        )
 
     def test_js_round(self):
         self.assertEqual(js_round(100.5), 101)

@@ -1,11 +1,12 @@
 {
     "version":  "v5.0.1",
     "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.1/NaeilERPUpdater_Setup_v5.0.1.exe",
-    "sha256":  "3A1C2832CE62A38FABD57873E4ED4C0331BE2621AB90861F9E02D9113E2660E1",
+    "sha256":  "ECA7ACDE3F878E9A63663C7F6011D47D25143D4D5C5079DD973B602DBF931F5F",
     "notes":  [
                   "운임/시즌 DB 로드는 Windows 인증서 저장소 기반 urllib로 전환해 Google Drive venv 환경의 TLS 실패를 피하도록 수정했습니다.",
                   "시작 시 운임/시즌 자동 로드는 12시간 이내 캐시를 우선 사용해 Firestore 읽기 쿼터 소모를 줄였습니다.",
                   "요금 입력표에 항공사코드 선택값을 보존하고, 요금수정 보내기/ERP 실행 시 항공사코드를 함께 전달합니다.",
+                  "TOPAS 계산 결과 중 마감으로 ERP 입력표에서 제외된 날짜를 팝업에서 확인하고 복사할 수 있습니다.",
                   "TOPAS 귀국편 AC1 기본 반복 횟수를 출발편 실행 횟수의 110%로 자동 제안합니다.",
                   "요금 입력표 실행취소/다시실행 범위를 수식, 행 조작, 엑셀 불러오기, 요금구간 병합, TOPAS 결과 전달까지 확장했습니다.",
                   "요금구간 병합 시 중간에 비는 날짜를 하나의 기간으로 합치지 않고 구간을 나누며 빈 날짜를 안내합니다.",
