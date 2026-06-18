@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.2",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.2/NaeilERPUpdater_Setup_v5.0.2.exe",
-    "sha256":  "808D0F86EF842FE2E03CC517568E2F5F21DE8589047A13536ECA757EFC20ED60",
+    "version":  "v5.0.3",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.3/NaeilERPUpdater_Setup_v5.0.3.exe",
+    "sha256":  "BF46A9F2A2A7E98468DFDBF0A49B57853DB8C267DFD16C2AE164E421804E253A",
     "notes":  [
-                  "v5.0.1 빌드 중 반영된 최신 소스 상태를 기준으로 다시 빌드한 패치입니다.",
-                  "TOPAS 계산 결과 중 마감으로 ERP 입력표에서 제외된 날짜를 팝업에서 확인하고 복사할 수 있습니다.",
-                  "항공사코드 전달, 귀국편 AC1 110% 제안, 입력표 undo/redo 확장, 운임/시즌 DB 로드 안정화, 디버그 Chrome 이전 탭 복원 방지 수정이 포함됩니다."
+                  "요금 입력표의 호텔명 필드는 이번 릴리스에서 제외했습니다.",
+                  "전체 지우기를 누르면 입력표와 함께 항공사코드 선택값이 _선택_으로 초기화됩니다.",
+                  "ERP 디버그 Chrome이 열려 있으면 항공사코드 옵션 목록을 다시 읽어 드롭다운을 최신 상태로 맞춥니다."
               ]
 }

@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.2"
+APP_VERSION = "v5.0.3"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -3256,9 +3256,14 @@ class RpaGuiApp:
         self._clear_merge_restore_snapshot()
         self.sheet.set_sheet_data([["", "", "", "", "", "", "", ""] for _ in range(INITIAL_BLANK_ROWS)], reset_col_positions=False, reset_row_positions=True)
         self._set_source_badge('')
+        if hasattr(self, 'airline_var'):
+            self.airline_var.set(AIRLINE_EMPTY_LABEL)
+        self.selected_airline_code = ''
         self.refresh_count()
         self._load_active_into_fb()
         self._sync_sheet_undo_baseline()
+        self.set_status('입력표를 지우고 항공사코드 목록을 새로고침합니다.', self.fg_muted)
+        self.refresh_airline_options_from_erp(silent=True)
 
     @staticmethod
     def _merge_fare_records_preserving_gaps(records):
@@ -5039,9 +5044,6 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     def _set_erp_airline_filter(self, selectors, airline_code):
         airline_code = '' if airline_code is None else str(airline_code).strip().upper()
-        if not airline_code:
-            return None
-
         selector = selectors.get('airline_select', '#air2Cd')
         result = self.driver.execute_script(
             """
@@ -5053,7 +5055,7 @@ class RpaGuiApp:
             }
             sel.value = value;
             const selected = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-            if (sel.value !== value) {
+            if (value && sel.value !== value) {
                 return {ok: false, reason: 'missing_option', value: sel.value || ''};
             }
             sel.dispatchEvent(new Event('change', {bubbles: true}));
@@ -5471,6 +5473,11 @@ class RpaGuiApp:
             total_items = len(self.fares_data)
 
             print(f"[RPA 정보] 총 {total_items}개의 날짜 데이터 처리를 시작합니다.")
+            if not self.find_and_switch_frame(selectors["search_date_input"]):
+                err_text = "출발일자 입력 필드를 찾을 수 없어 ERP 조회 조건을 설정하지 못했습니다."
+                print(f"[오류] {err_text}")
+                self.root.after(0, lambda msg=err_text: messagebox.showerror("ERP 화면 오류", msg))
+                return
 
             for index, row in enumerate(self.fares_data):
                 if not self.is_running:
@@ -5545,10 +5552,12 @@ class RpaGuiApp:
                         print(f" -> [경고] 종료일이 ERP에 '{_read_end_value()}'(으)로 남아 기대값({date_end_val})과 다릅니다. "
                               f"해당 기간 일부 상품이 조회/수정에서 누락될 수 있으니 ERP에서 직접 확인해 주세요.")
 
+                    airline_result = self._set_erp_airline_filter(selectors, airline_code)
                     if airline_code:
-                        airline_result = self._set_erp_airline_filter(selectors, airline_code)
                         airline_text = airline_result.get('text') or airline_code
                         print(f" -> 항공사 필터 설정: {airline_text}")
+                    elif index == 0:
+                        print(" -> 항공사 필터 초기화: 전체 항공사 대상")
 
                     search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
                     self.driver.execute_script("arguments[0].click();", search_btn)

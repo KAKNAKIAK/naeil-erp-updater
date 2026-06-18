@@ -13,6 +13,7 @@ __pycache__/
 *.bak
 *.spec.bak
 recovered/
+legacy_archive_*/
 _diag_fare.py
 inspect_chrome.py
 chrome_inspect*.png

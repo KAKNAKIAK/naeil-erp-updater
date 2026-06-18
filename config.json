@@ -45,6 +45,7 @@
     "login_btn": "#btnLogin",
     "search_date_input": "#searchStDate",
     "search_date_end_input": "#searchEnDate",
+    "airline_select": "#air2Cd",
     "search_button": "#gridMain_r",
     "header_all_checkbox": "td.aui-grid-row-check-header input",
     "update_button": "#priceUpdate",
