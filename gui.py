@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.3"
+APP_VERSION = "v5.0.4"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -303,11 +303,15 @@ class RpaGuiApp:
         self.route_user_modified = False
         self.custom_night_var = tk.StringVar(value='')
         self.airline_var = tk.StringVar(value=AIRLINE_EMPTY_LABEL)
+        self.price_desc_var = tk.StringVar(value='')
+        self.progress_text_var = tk.StringVar(value='')
         self.airline_choices = []
         self.airline_value_by_label = {}
         self.airline_label_by_value = {}
         self.airline_refresh_thread = None
         self.selected_airline_code = ''
+        self.selected_price_desc = ''
+        self.selected_progress_text = ''
         self.night_vars = {}
         self.night_chip_buttons = {}
         self.v5_calculation_result = None
@@ -370,6 +374,11 @@ class RpaGuiApp:
             'search_date_input': '#searchStDate',
             'search_date_end_input': '#searchEnDate',
             'airline_select': '#air2Cd',
+            'price_desc_input': '#priceDesc',
+            'event_modify_button': '#eventModify',
+            'bulk_update_save_button': '#appSave',
+            'progress_status_checkbox': '#procCdChk',
+            'progress_status_select': '#procCd',
             'search_button': '#gridMain_r',
             'header_all_checkbox': 'td.aui-grid-row-check-header input',
             'update_button': '#priceUpdate',
@@ -931,17 +940,17 @@ class RpaGuiApp:
         )
         self.period_mode_cb.pack(side=tk.RIGHT, padx=(10, 0))
 
-        airline_bar = tk.Frame(sheet_card, bg=self.card_color)
-        airline_bar.pack(fill=tk.X, pady=(0, 6))
+        search_filter_bar = tk.Frame(sheet_card, bg=self.card_color)
+        search_filter_bar.pack(fill=tk.X, pady=(0, 6))
         tk.Label(
-            airline_bar,
+            search_filter_bar,
             text='항공사코드',
             font=('맑은 고딕', 9, 'bold'),
             bg=self.card_color,
             fg=self.fg_color,
         ).pack(side=tk.LEFT, padx=(0, 6))
         self.airline_combo = ttk.Combobox(
-            airline_bar,
+            search_filter_bar,
             textvariable=self.airline_var,
             values=self._airline_combo_values(),
             width=24,
@@ -950,6 +959,50 @@ class RpaGuiApp:
         self.airline_combo.pack(side=tk.LEFT)
         self.airline_combo.bind('<<ComboboxSelected>>', self._on_airline_combo_change)
         self.airline_combo.bind('<FocusOut>', self._on_airline_combo_change)
+        tk.Label(
+            search_filter_bar,
+            text='요금구분',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_color,
+        ).pack(side=tk.LEFT, padx=(16, 6))
+        self.price_desc_entry = tk.Entry(
+            search_filter_bar,
+            textvariable=self.price_desc_var,
+            width=18,
+            bg=self.input_bg,
+            fg=self.fg_color,
+            insertbackground='white',
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            highlightthickness=1,
+            font=('맑은 고딕', 9),
+        )
+        self.price_desc_entry.pack(side=tk.LEFT, ipady=3)
+        tk.Label(
+            search_filter_bar,
+            text='진행구분',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_color,
+        ).pack(side=tk.LEFT, padx=(16, 6))
+        self.progress_text_entry = tk.Entry(
+            search_filter_bar,
+            textvariable=self.progress_text_var,
+            width=14,
+            bg=self.input_bg,
+            fg=self.fg_color,
+            insertbackground='white',
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            highlightthickness=1,
+            font=('맑은 고딕', 9),
+        )
+        self.progress_text_entry.pack(side=tk.LEFT, ipady=3)
 
         # 수식 입력줄(formula bar): '=' 식 편집 중 표의 칸을 클릭하면 참조가 삽입된다
         fb_frame = tk.Frame(sheet_card, bg=self.card_color)
@@ -2720,6 +2773,8 @@ class RpaGuiApp:
             'merged_merged': copy.deepcopy(self._merged_fare_merged_data),
             'source_text': source_text,
             'airline_text': self.airline_var.get() if hasattr(self, 'airline_var') else AIRLINE_EMPTY_LABEL,
+            'price_desc_text': self.price_desc_var.get() if hasattr(self, 'price_desc_var') else '',
+            'progress_text': self.progress_text_var.get() if hasattr(self, 'progress_text_var') else '',
             'active_cell': tuple(self._active_cell) if hasattr(self, '_active_cell') else (0, 0),
         }
 
@@ -2765,6 +2820,10 @@ class RpaGuiApp:
             self._set_source_badge(snapshot.get('source_text', ''))
             if hasattr(self, 'airline_var'):
                 self.airline_var.set(snapshot.get('airline_text') or AIRLINE_EMPTY_LABEL)
+            if hasattr(self, 'price_desc_var'):
+                self.price_desc_var.set(snapshot.get('price_desc_text') or '')
+            if hasattr(self, 'progress_text_var'):
+                self.progress_text_var.set(snapshot.get('progress_text') or '')
             active = snapshot.get('active_cell') or (0, 0)
             try:
                 self._active_cell = (max(0, int(active[0])), max(0, int(active[1])))
@@ -3258,7 +3317,13 @@ class RpaGuiApp:
         self._set_source_badge('')
         if hasattr(self, 'airline_var'):
             self.airline_var.set(AIRLINE_EMPTY_LABEL)
+        if hasattr(self, 'price_desc_var'):
+            self.price_desc_var.set('')
+        if hasattr(self, 'progress_text_var'):
+            self.progress_text_var.set('')
         self.selected_airline_code = ''
+        self.selected_price_desc = ''
+        self.selected_progress_text = ''
         self.refresh_count()
         self._load_active_into_fb()
         self._sync_sheet_undo_baseline()
@@ -3664,6 +3729,19 @@ class RpaGuiApp:
             adult_profit_cell = str(r_padded[col_adult_profit]).strip() if r_padded[col_adult_profit] is not None else ""
             child_cell = str(r_padded[col_child]).strip() if r_padded[col_child] is not None else ""
             infant_cell = str(r_padded[col_infant]).strip() if r_padded[col_infant] is not None else ""
+            fare_text_cells = [
+                adult_air_cell,
+                adult_hotel_cell,
+                adult_land_cell,
+                adult_tour_cell,
+                adult_profit_cell,
+                child_cell,
+                infant_cell,
+            ]
+            progress_status_text = next(
+                (cell for cell in fare_text_cells if self._progress_status_from_text(cell)[0]),
+                ""
+            )
 
             line = i + 1
             norm_date = normalize_date(date_cell)
@@ -3686,6 +3764,8 @@ class RpaGuiApp:
                 raw_cell = row_cells[col_idx] if col_idx < len(row_cells) else None
                 raw_text = str(raw_cell).strip() if raw_cell is not None else ""
                 if not raw_text:
+                    return ""
+                if self._progress_status_from_text(raw_text)[0]:
                     return ""
                 val = self._coerce_fare(row_cells, col_idx)
                 if val is None:
@@ -3713,7 +3793,8 @@ class RpaGuiApp:
                 "adult_tour": adult_tour, 
                 "adult_profit": adult_profit, 
                 "child_fare": child_fare, 
-                "infant_fare": infant_fare
+                "infant_fare": infant_fare,
+                "progress_status": progress_status_text,
             })
         return rows, errors
 
@@ -3861,6 +3942,14 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
+            self.price_desc_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
+        except Exception:
+            pass
+        try:
+            self.progress_text_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
+        except Exception:
+            pass
+        try:
             if locked:
                 self.sheet.disable_bindings("edit_cell", "paste", "cut", "delete", "undo")
             else:
@@ -3892,6 +3981,8 @@ class RpaGuiApp:
             return
         self.fares_data = filtered
         self.selected_airline_code = self._selected_airline_code()
+        self.selected_price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
+        self.selected_progress_text = self.progress_text_var.get().strip() if hasattr(self, 'progress_text_var') else ''
 
         self.is_running = True
         self.is_paused = False
@@ -4745,10 +4836,10 @@ class RpaGuiApp:
         if depth >= max_depth:
             return None
 
-        frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
-        for frame in frames:
+        frame_count = len(driver.find_elements(By.CSS_SELECTOR, 'iframe, frame'))
+        for i in range(frame_count):
             try:
-                driver.switch_to.frame(frame)
+                driver.switch_to.frame(i)
                 found = self._topas_find_element_in_frames(driver, selector, depth + 1, max_depth)
                 if found is not None:
                     return found
@@ -4798,10 +4889,10 @@ class RpaGuiApp:
         if depth >= max_depth:
             return None
 
-        frames = driver.find_elements(By.CSS_SELECTOR, 'iframe, frame')
-        for frame in frames:
+        frame_count = len(driver.find_elements(By.CSS_SELECTOR, 'iframe, frame'))
+        for i in range(frame_count):
             try:
-                driver.switch_to.frame(frame)
+                driver.switch_to.frame(i)
                 found = self._topas_find_interactable_element_in_frames(driver, selector, depth + 1, max_depth)
                 if found is not None:
                     return found
@@ -5079,6 +5170,242 @@ class RpaGuiApp:
                 raise RuntimeError(f"항공사코드 필드에 '{airline_code}' 코드 옵션이 없습니다.")
             raise RuntimeError(f"항공사코드 필드({selector})를 설정하지 못했습니다.")
         return result
+
+    def _set_erp_text_filter(self, selectors, selector_key, default_selector, value, label):
+        value = '' if value is None else str(value).strip()
+        selector = selectors.get(selector_key, default_selector)
+        result = self.driver.execute_script(
+            """
+            const selector = arguments[0];
+            const value = arguments[1];
+            const el = document.querySelector(selector);
+            if (!el) {
+                return {ok: false, reason: 'not_found'};
+            }
+            el.value = value;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.dispatchEvent(new Event('blur', {bubbles: true}));
+            return {ok: true, value: el.value || ''};
+            """,
+            selector,
+            value,
+        )
+        if not result or not result.get('ok'):
+            raise RuntimeError(f"{label} 필드({selector})를 설정하지 못했습니다.")
+        actual = str(result.get('value') or '').strip()
+        if actual != value:
+            raise RuntimeError(f"{label} 필드 값이 기대값과 다릅니다. 기대={value!r}, 실제={actual!r}")
+        return result
+
+    def _set_erp_date_input(self, selector, value, label, attempts=4, pause=0.2):
+        value = '' if value is None else str(value).strip()
+
+        def read_value():
+            try:
+                el = self.driver.find_element(By.CSS_SELECTOR, selector)
+                return (el.get_attribute('value') or '').strip().replace('.', '-').replace('/', '-')
+            except Exception:
+                return ''
+
+        last_value = ''
+        for _ in range(max(1, attempts)):
+            el = self.driver.find_element(By.CSS_SELECTOR, selector)
+            result = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const value = arguments[1];
+                if (!el) {
+                    return {ok:false, value:''};
+                }
+                el.value = '';
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.value = value;
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.dispatchEvent(new Event('blur', {bubbles:true}));
+                try {
+                    if (window.jQuery) {
+                        window.jQuery(el).val(value).trigger('change').trigger('blur');
+                    }
+                } catch (e) {}
+                return {ok:true, value: el.value || ''};
+                """,
+                el,
+                value,
+            )
+            if not result or not result.get('ok'):
+                raise RuntimeError(f"{label} 입력 필드({selector})를 설정하지 못했습니다.")
+            time.sleep(pause)
+            last_value = read_value()
+            if last_value == value:
+                return last_value
+        raise RuntimeError(f"{label}이 ERP에 '{last_value}'(으)로 남아 기대값({value})과 다릅니다.")
+
+    @staticmethod
+    def _progress_status_from_text(text):
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if "예약마감" in normalized:
+            return "05", "예약마감"
+        return "", ""
+
+    def _current_page_progress_status_matches(self, progress_code, progress_label):
+        """현재 페이지의 진행구분이 이미 목표값이면 중복 정보일괄수정을 피한다."""
+        grid_id = self.config.get('grid_id', '#gridMain')
+        try:
+            rows = self.driver.execute_script(
+                """
+                try {
+                    return (typeof AUIGrid !== 'undefined') ? AUIGrid.getGridData(arguments[0]) : [];
+                } catch(e) {
+                    return [];
+                }
+                """,
+                grid_id,
+            ) or []
+        except Exception:
+            return False
+        if not rows:
+            return False
+        target_label = re.sub(r"\s+", "", str(progress_label or ""))
+        for row in rows:
+            code = str(row.get('procCd') or '').strip()
+            label = re.sub(
+                r"\s+",
+                "",
+                str(row.get('procNm') or row.get('procDesc') or row.get('procCdNm') or ''),
+            )
+            if code == progress_code:
+                continue
+            if target_label and target_label in label:
+                continue
+            return False
+        return True
+
+    def _current_page_progress_status_counts(self):
+        grid_id = self.config.get('grid_id', '#gridMain')
+        try:
+            rows = self.driver.execute_script(
+                """
+                try {
+                    return (typeof AUIGrid !== 'undefined') ? AUIGrid.getGridData(arguments[0]) : [];
+                } catch(e) {
+                    return [];
+                }
+                """,
+                grid_id,
+            ) or []
+        except Exception:
+            rows = []
+
+        counts = {}
+        reservation_closed = 0
+        for row in rows:
+            code = str(row.get('procCd') or '').strip()
+            label = re.sub(
+                r"\s+",
+                "",
+                str(row.get('procNm') or row.get('procDesc') or row.get('procCdNm') or ''),
+            )
+            key = f"{code}|{label or '-'}"
+            counts[key] = counts.get(key, 0) + 1
+            if code == "05" or "예약마감" in label:
+                reservation_closed += 1
+        return {
+            "total": len(rows),
+            "reservation_closed": reservation_closed,
+            "counts": counts,
+        }
+
+    @staticmethod
+    def _should_skip_price_update_for_all_closed(progress_counts):
+        total_count = int((progress_counts or {}).get("total") or 0)
+        reservation_closed_count = int((progress_counts or {}).get("reservation_closed") or 0)
+        return total_count > 0 and reservation_closed_count >= total_count
+
+    def _apply_current_page_progress_status(self, selectors, progress_code, progress_label,
+                                            driver_timeout, erp_short_pause, erp_poll_interval):
+        """현재 조회/페이지의 선택 행에 정보일괄수정 진행구분을 적용한다."""
+        header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
+        if not header_chk.is_selected():
+            self.driver.execute_script("arguments[0].click();", header_chk)
+            try:
+                WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
+                    lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
+                )
+            except Exception:
+                time.sleep(erp_short_pause)
+
+        event_modify_selector = selectors.get("event_modify_button", "#eventModify")
+        event_modify_btn = self.driver.find_element(By.CSS_SELECTOR, event_modify_selector)
+        self.driver.execute_script("arguments[0].click();", event_modify_btn)
+
+        proc_select_selector = selectors.get("progress_status_select", "#procCd")
+        proc_chk_selector = selectors.get("progress_status_checkbox", "#procCdChk")
+        save_selector = selectors.get("bulk_update_save_button", "#appSave")
+        wait = WebDriverWait(self.driver, driver_timeout, poll_frequency=erp_poll_interval)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, proc_select_selector)))
+        wait.until(
+            lambda d: d.execute_script(
+                """
+                const sel = document.querySelector(arguments[0]);
+                return !!(sel && Array.from(sel.options || []).some(opt => opt.value === arguments[1]));
+                """,
+                proc_select_selector,
+                progress_code,
+            )
+        )
+
+        result = self.driver.execute_script(
+            """
+            const chk = document.querySelector(arguments[0]);
+            const sel = document.querySelector(arguments[1]);
+            const code = arguments[2];
+            if (!chk || !sel) {
+                return {ok:false, reason:'missing_field'};
+            }
+            chk.checked = true;
+            if (window.jQuery) {
+                window.jQuery(chk).prop('checked', true).trigger('change');
+            } else {
+                chk.dispatchEvent(new Event('change', {bubbles:true}));
+            }
+            sel.value = code;
+            sel.dispatchEvent(new Event('change', {bubbles:true}));
+            const selected = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+            return {ok:true, checked: chk.checked, value: sel.value || '', text: selected ? (selected.textContent || '').trim() : ''};
+            """,
+            proc_chk_selector,
+            proc_select_selector,
+            progress_code,
+        )
+        if not result or not result.get("ok") or not result.get("checked") or result.get("value") != progress_code:
+            raise RuntimeError(f"진행구분 필드를 {progress_label}({progress_code})로 설정하지 못했습니다.")
+
+        save_btn = self.driver.find_element(By.CSS_SELECTOR, save_selector)
+        self.driver.execute_script("arguments[0].click();", save_btn)
+
+        error_keywords = ('408', '지연', '연결이 원활', '관리자에게 문의', '오류가', '실패')
+        save_alert_error = None
+        for _ in range(4):
+            try:
+                alert = self.driver.switch_to.alert
+                atext = alert.text or ''
+                print(f" -> [진행구분 얼럿 감지]: {atext}")
+                if any(k in atext for k in error_keywords):
+                    save_alert_error = atext
+                    alert.accept()
+                    break
+                alert.accept()
+                time.sleep(erp_short_pause)
+            except Exception:
+                break
+        if save_alert_error:
+            raise RuntimeError(f"진행구분 저장 오류 가능: {save_alert_error[:120]}")
+
+        wait.until(lambda d: not d.find_elements(By.CSS_SELECTOR, proc_select_selector))
+        self.wait_until_grid_ready_after_save(selectors, driver_timeout)
 
     def find_and_switch_frame(self, selector):
         by, search_val = self._selector_locator(selector)
@@ -5502,10 +5829,15 @@ class RpaGuiApp:
                 child_val = str(row.get("child_fare", "")).strip()
                 infant_val = str(row.get("infant_fare", "")).strip()
                 airline_code = str(row.get("airline_code") or self.selected_airline_code or "").strip().upper()
+                price_desc = str(row.get("price_desc") or self.selected_price_desc or "").strip()
+                progress_text = str(row.get("progress_status") or self.selected_progress_text or "").strip()
+                progress_code, progress_label = self._progress_status_from_text(progress_text)
 
                 print(f"\n========================================================")
                 print(f"[{index+1}/{total_items}] 대상 날짜: {date_log_str}")
                 print(f" -> 입력 데이터: 성인(항공={adult_air}, 호텔={adult_hotel}, 지상={adult_land}, 경비={adult_tour}, 수익={adult_profit}), 소아={child_val}, 유아={infant_val}")
+                if progress_code:
+                    print(f" -> 진행구분 변경 예약: {progress_label}({progress_code})")
 
                 if not self.find_and_switch_frame(selectors["search_date_input"]):
                     err_msg = "출발일자 입력 필드를 찾을 수 없습니다."
@@ -5515,42 +5847,19 @@ class RpaGuiApp:
                     continue
 
                 try:
-                    st_date_input = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_input"])
-
-                    # 1) 시작일 입력 후, datepicker 의 '시작일 변경 시 종료일을 시작일로 맞추는'
-                    #    자동 리셋 동작을 먼저 발생시킨다(change/blur). 그래야 그 다음에 넣는
-                    #    종료일이 리셋에 덮이지 않는다.
-                    self.driver.execute_script("arguments[0].value = '';", st_date_input)
-                    st_date_input.send_keys(date_val)
-                    self.driver.execute_script(
-                        "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
-                        "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
-                        st_date_input)
-
-                    # 2) 종료일을 마지막에 입력하고, 위젯이 값을 무시/리셋하는 경우를 대비해
-                    #    실제 표시값을 다시 읽어 일치할 때까지 최대 4회 재입력한다.
-                    def _read_end_value():
-                        try:
-                            el = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_end_input"])
-                            return (el.get_attribute('value') or '').strip().replace('.', '-').replace('/', '-')
-                        except Exception:
-                            return ''
-
-                    for _ in range(4):
-                        en_date_input = self.driver.find_element(By.CSS_SELECTOR, selectors["search_date_end_input"])
-                        self.driver.execute_script("arguments[0].value = '';", en_date_input)
-                        en_date_input.send_keys(date_end_val)
-                        self.driver.execute_script(
-                            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
-                            "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
-                            en_date_input)
-                        if _read_end_value() == date_end_val:
-                            break
-                        time.sleep(0.2)
-
-                    if _read_end_value() != date_end_val:
-                        print(f" -> [경고] 종료일이 ERP에 '{_read_end_value()}'(으)로 남아 기대값({date_end_val})과 다릅니다. "
-                              f"해당 기간 일부 상품이 조회/수정에서 누락될 수 있으니 ERP에서 직접 확인해 주세요.")
+                    start_value = self._set_erp_date_input(
+                        selectors["search_date_input"],
+                        date_val,
+                        "시작일",
+                        pause=erp_short_pause,
+                    )
+                    end_value = self._set_erp_date_input(
+                        selectors["search_date_end_input"],
+                        date_end_val,
+                        "종료일",
+                        pause=erp_short_pause,
+                    )
+                    print(f" -> 날짜 필터 설정: {start_value} ~ {end_value}")
 
                     airline_result = self._set_erp_airline_filter(selectors, airline_code)
                     if airline_code:
@@ -5558,6 +5867,18 @@ class RpaGuiApp:
                         print(f" -> 항공사 필터 설정: {airline_text}")
                     elif index == 0:
                         print(" -> 항공사 필터 초기화: 전체 항공사 대상")
+
+                    price_desc_result = self._set_erp_text_filter(
+                        selectors,
+                        'price_desc_input',
+                        '#priceDesc',
+                        price_desc,
+                        '요금구분',
+                    )
+                    if price_desc:
+                        print(f" -> 요금구분 필터 설정: {price_desc_result.get('value') or price_desc}")
+                    elif index == 0:
+                        print(" -> 요금구분 필터 초기화: 전체 요금구분 대상")
 
                     search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
                     self.driver.execute_script("arguments[0].click();", search_btn)
@@ -5631,19 +5952,26 @@ class RpaGuiApp:
                         key: value for key, value in inputs_mapping.items()
                         if str(value).strip() != ""
                     }
-                    if not inputs_mapping:
-                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값이 없습니다.")
-                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "입력할 요금값 없음"})
+                    if not inputs_mapping and not progress_code:
+                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 진행구분 변경값이 없습니다.")
+                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "입력/변경값 없음"})
                         self.update_progress_ui(index + 1, total_items)
                         continue
 
                     # 페이지별 재시도/페이싱 설정 (서버 일시 지연 408 등 대응)
                     page_max_retries = max(1, int(self.config.get('page_max_retries', 3)))
                     page_pause = self._float_config('erp_page_pause', 1.0, 0.0, 10.0)
+                    done_actions = []
+                    if inputs_mapping:
+                        done_actions.append("요금 업데이트")
+                    if progress_code:
+                        done_actions.append("진행구분 변경")
+                    done_summary = " + ".join(done_actions) if done_actions else "작업"
 
                     target_page = 1
                     pages_done = 0
                     pages_failed = []
+                    pages_price_skipped_all_closed = 0
 
                     while target_page <= total_pages:
                         if not self.is_running:
@@ -5665,12 +5993,45 @@ class RpaGuiApp:
 
                                 if total_pages > 1:
                                     suffix = f" (재시도 {attempt}/{page_max_retries})" if attempt > 1 else ""
-                                    print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → 요금 입력 → 저장{suffix}")
+                                    actions = []
+                                    if inputs_mapping:
+                                        actions.append("요금 입력")
+                                    if progress_code:
+                                        actions.append(f"진행구분 {progress_label}")
+                                    print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → {' + '.join(actions)} → 저장{suffix}")
 
-                                self._save_current_page(
-                                    selectors, wait, inputs_mapping, driver_timeout,
-                                    erp_short_pause, erp_poll_interval
-                                )
+                                if inputs_mapping:
+                                    progress_counts = self._current_page_progress_status_counts()
+                                    reservation_closed_count = int(progress_counts.get("reservation_closed") or 0)
+                                    total_count = int(progress_counts.get("total") or 0)
+                                    if self._should_skip_price_update_for_all_closed(progress_counts):
+                                        pages_price_skipped_all_closed += 1
+                                        print(
+                                            " -> [요금 업데이트 스킵] 현재 페이지의 모든 행이 예약마감입니다. "
+                                            "ERP가 수정 가능한 요금 선택을 허용하지 않아 이 페이지의 요금 업데이트를 건너뜁니다."
+                                        )
+                                    else:
+                                        if reservation_closed_count:
+                                            print(
+                                                f" -> [요금 업데이트 안내] 현재 페이지 {total_count}건 중 "
+                                                f"예약마감 {reservation_closed_count}건은 ERP 정책상 제외되고, "
+                                                "수정 가능한 행만 업데이트됩니다."
+                                            )
+                                        self._save_current_page(
+                                            selectors, wait, inputs_mapping, driver_timeout,
+                                            erp_short_pause, erp_poll_interval
+                                        )
+                                if progress_code:
+                                    if inputs_mapping:
+                                        self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                    if self._current_page_progress_status_matches(progress_code, progress_label):
+                                        print(f" -> 진행구분 확인: 현재 페이지가 이미 {progress_label} 상태입니다.")
+                                    else:
+                                        print(f" -> 진행구분 정보일괄수정: {progress_label}")
+                                        self._apply_current_page_progress_status(
+                                            selectors, progress_code, progress_label,
+                                            driver_timeout, erp_short_pause, erp_poll_interval
+                                        )
                                 page_ok = True
                                 break
                             except Exception as page_ex:
@@ -5709,11 +6070,17 @@ class RpaGuiApp:
                         print(f" -> [부분 실패] {date_log_str}: {msg}")
                         rpa_history.append({"date": date_log_str, "status": "FAIL", "error": msg})
                     else:
+                        skip_note = ""
+                        if pages_price_skipped_all_closed:
+                            skip_note = f" (전체 예약마감 페이지 {pages_price_skipped_all_closed}개 요금 업데이트 스킵)"
                         if total_pages > 1:
-                            print(f" -> [성공] {date_log_str} 요금 업데이트 완료 (전체 {pages_done}/{total_pages}페이지)")
+                            print(f" -> [성공] {date_log_str} {done_summary} 완료 (전체 {pages_done}/{total_pages}페이지){skip_note}")
                         else:
-                            print(f" -> [성공] {date_log_str} 요금 업데이트 완료")
-                        rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
+                            print(f" -> [성공] {date_log_str} {done_summary} 완료{skip_note}")
+                        if inputs_mapping and not progress_code and pages_price_skipped_all_closed == total_pages:
+                            rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "전체 예약마감으로 요금 업데이트 대상 없음"})
+                        else:
+                            rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
 
                 except Exception as row_ex:
                     err_msg = str(row_ex).replace("\n", " ")

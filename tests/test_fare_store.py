@@ -42,7 +42,7 @@ class PreferCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "snap.json"
             _write_cache(cache, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            with mock.patch.object(store, "_fetch_collection", side_effect=AssertionError("네트워크 호출 금지")):
+            with mock.patch.object(store, "_fetch_snapshot_doc", side_effect=AssertionError("네트워크 호출 금지")), mock.patch.object(store, "_fetch_collection", side_effect=AssertionError("네트워크 호출 금지")):
                 snap = load_fare_snapshot({}, cache_path=cache, prefer_cache_within_hours=12)
         self.assertEqual(snap.source, "cache")
         self.assertEqual(len(snap.fares), 1)
@@ -52,14 +52,14 @@ class PreferCacheTest(unittest.TestCase):
             cache = Path(tmp) / "snap.json"
             old = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
             _write_cache(cache, old)
-            with mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
+            with mock.patch.object(store, "_fetch_snapshot_doc", return_value=None), mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
                 snap = load_fare_snapshot({}, cache_path=cache, prefer_cache_within_hours=12)
         self.assertEqual(snap.source, "firestore")
 
     def test_missing_cache_fetches_from_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "snap.json"
-            with mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
+            with mock.patch.object(store, "_fetch_snapshot_doc", return_value=None), mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
                 snap = load_fare_snapshot({}, cache_path=cache, prefer_cache_within_hours=12)
         self.assertEqual(snap.source, "firestore")
 
@@ -67,9 +67,25 @@ class PreferCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "snap.json"
             _write_cache(cache, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            with mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
+            with mock.patch.object(store, "_fetch_snapshot_doc", return_value=None), mock.patch.object(store, "_fetch_collection", return_value=[{"route": "ICN-SPN"}]):
                 snap = load_fare_snapshot({}, cache_path=cache)
         self.assertEqual(snap.source, "firestore")
+
+    def test_snapshot_doc_used_without_collection_scan(self):
+        # 스냅샷 단일 문서가 있으면 컬렉션 전량 스캔(_fetch_collection)을 호출하지 않아야 한다.
+        def fake_snapshot(project_id, api_key, doc_path):
+            if doc_path == "meta/fares-snapshot":
+                return [{"route": "ICN-SPN", "type": "기준", "classCode": "Y", "roundTripFare": 500000}]
+            return [{"route": "ICN-SPN", "type": "기준", "startDate": "2026-01-01", "endDate": "2026-12-31"}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "snap.json"
+            with mock.patch.object(store, "_fetch_snapshot_doc", side_effect=fake_snapshot), mock.patch.object(store, "_fetch_collection", side_effect=AssertionError("스냅샷이 있으면 컬렉션 전량 스캔 금지")):
+                snap = load_fare_snapshot({}, cache_path=cache)
+        self.assertEqual(snap.source, "firestore")
+        self.assertEqual(len(snap.fares), 1)
+        self.assertEqual(snap.fares[0]["route"], "ICN-SPN")
+        self.assertEqual(len(snap.seasons), 1)
 
 
 if __name__ == "__main__":

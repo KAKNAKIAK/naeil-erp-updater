@@ -118,6 +118,66 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(rows[0]["child_fare"], "")
         self.assertEqual(rows[0]["infant_fare"], "")
 
+    def test_sheet_reservation_closed_text_becomes_progress_status(self):
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Sheet:
+            def get_sheet_data(self):
+                return [["2026-07-15", "예약마감", "", "", "", "", "", ""]]
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.period_mode_var = Var(False)
+        app.sheet = Sheet()
+
+        rows, errors = app.read_sheet_data()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(rows[0]["progress_status"], "예약마감")
+        self.assertEqual(rows[0]["adult_air"], "")
+        self.assertEqual(app._progress_status_from_text(rows[0]["progress_status"]), ("05", "예약마감"))
+
+    def test_current_page_progress_counts_detects_reservation_closed(self):
+        class Driver:
+            def execute_script(self, *_args):
+                return [
+                    {"procCd": "05", "procNm": "예약마감"},
+                    {"procCd": "04", "procNm": "예약신청"},
+                    {"procCd": "", "procNm": "예약 마감"},
+                ]
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.config = {"grid_id": "#gridMain"}
+        app.driver = Driver()
+
+        summary = app._current_page_progress_status_counts()
+
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["reservation_closed"], 2)
+        self.assertEqual(summary["counts"]["05|예약마감"], 1)
+        self.assertFalse(RpaGuiApp._should_skip_price_update_for_all_closed(summary))
+
+    def test_price_update_skips_only_when_all_rows_are_reservation_closed(self):
+        self.assertFalse(
+            RpaGuiApp._should_skip_price_update_for_all_closed(
+                {"total": 3, "reservation_closed": 2}
+            )
+        )
+        self.assertTrue(
+            RpaGuiApp._should_skip_price_update_for_all_closed(
+                {"total": 3, "reservation_closed": 3}
+            )
+        )
+        self.assertFalse(
+            RpaGuiApp._should_skip_price_update_for_all_closed(
+                {"total": 0, "reservation_closed": 0}
+            )
+        )
+
     def test_calculation_debug_groups_round_trips_by_night(self):
         result = calculate_round_trips(
             DEP_TEXT,

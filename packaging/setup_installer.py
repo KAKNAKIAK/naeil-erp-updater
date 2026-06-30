@@ -28,7 +28,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v5.0.3"
+APP_VERSION = "v5.0.4"
 
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
@@ -42,6 +42,11 @@ DEFAULT_SELECTORS = {
     "search_date_input": "#searchStDate",
     "search_date_end_input": "#searchEnDate",
     "airline_select": "#air2Cd",
+    "price_desc_input": "#priceDesc",
+    "event_modify_button": "#eventModify",
+    "bulk_update_save_button": "#appSave",
+    "progress_status_checkbox": "#procCdChk",
+    "progress_status_select": "#procCd",
     "search_button": "#gridMain_r",
     "header_all_checkbox": "td.aui-grid-row-check-header input",
     "update_button": "#priceUpdate",

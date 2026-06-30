@@ -1,10 +1,11 @@
 {
-    "version":  "v5.0.3",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.3/NaeilERPUpdater_Setup_v5.0.3.exe",
-    "sha256":  "BF46A9F2A2A7E98468DFDBF0A49B57853DB8C267DFD16C2AE164E421804E253A",
+    "version":  "v5.0.4",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.4/NaeilERPUpdater_Setup_v5.0.4.exe",
+    "sha256":  "C6F05F5470D923D096B64D95A1F2D876F211DD9A70D28198F7C3FE6AAC3B3399",
     "notes":  [
-                  "요금 입력표의 호텔명 필드는 이번 릴리스에서 제외했습니다.",
-                  "전체 지우기를 누르면 입력표와 함께 항공사코드 선택값이 _선택_으로 초기화됩니다.",
-                  "ERP 디버그 Chrome이 열려 있으면 항공사코드 옵션 목록을 다시 읽어 드롭다운을 최신 상태로 맞춥니다."
+                  "요금 입력표 상단에 요금구분 검색 조건을 추가했습니다.",
+                  "예약마감 입력 시 ERP 정보일괄수정으로 진행구분 예약마감을 적용합니다.",
+                  "전체 예약마감 페이지는 ERP 알림 없이 요금 업데이트만 건너뜁니다.",
+                  "운임/시즌 DB는 스냅샷 문서를 우선 사용해 Firestore 읽기 횟수를 줄입니다."
               ]
 }

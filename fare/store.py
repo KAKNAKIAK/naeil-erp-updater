@@ -54,8 +54,7 @@ def load_fare_snapshot(
                 return cached
 
     try:
-        fares = tuple(_fetch_collection(project_id, api_key, "fares"))
-        seasons = tuple(_fetch_collection(project_id, api_key, "seasons"))
+        fares, seasons = _fetch_fares_and_seasons(project_id, api_key)
         loaded_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         snapshot = FareSnapshot(fares=fares, seasons=seasons, loaded_at=loaded_at, source="firestore")
         _save_cache(cache, snapshot)
@@ -91,6 +90,44 @@ def _fetch_collection(project_id: str, api_key: str, collection: str) -> list[di
         page_token = payload.get("nextPageToken") or ""
         if not page_token:
             return items
+
+
+def _fetch_fares_and_seasons(
+    project_id: str, api_key: str
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    """운임/시즌을 단일 스냅샷 문서(meta/*-snapshot)에서 먼저 읽는다(읽기 2회).
+    웹앱(fare-calculator)이 저장 시 전체 목록을 이 문서 하나에 함께 발행한다.
+    스냅샷이 아직 없으면(404) 기존처럼 컬렉션 전량을 읽는 방식으로 자동 fallback 한다."""
+    fares_snapshot = _fetch_snapshot_doc(project_id, api_key, "meta/fares-snapshot")
+    seasons_snapshot = _fetch_snapshot_doc(project_id, api_key, "meta/seasons-snapshot")
+    if fares_snapshot is not None and seasons_snapshot is not None:
+        return tuple(fares_snapshot), tuple(seasons_snapshot)
+    fares = tuple(_fetch_collection(project_id, api_key, "fares"))
+    seasons = tuple(_fetch_collection(project_id, api_key, "seasons"))
+    return fares, seasons
+
+
+def _fetch_snapshot_doc(project_id: str, api_key: str, doc_path: str) -> list[dict[str, Any]] | None:
+    """meta/*-snapshot 단일 문서의 list 필드를 읽어 반환한다.
+    문서가 없으면(404) None을 돌려 호출부가 컬렉션 전량 fetch로 fallback 하게 한다.
+    429 등 다른 오류는 그대로 전파해 상위에서 캐시 fallback 으로 처리한다."""
+    encoded_project = quote(project_id, safe="")
+    encoded_path = quote(doc_path, safe="/")
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{encoded_project}"
+        f"/databases/(default)/documents/{encoded_path}?key={quote(api_key, safe='')}"
+    )
+    try:
+        payload = _http_json(url)
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    item = _decode_document(payload)
+    value = item.get("list")
+    if isinstance(value, list) and value:
+        return [dict(entry) for entry in value if isinstance(entry, dict)]
+    return None
 
 
 _SSL_CONTEXT: ssl.SSLContext | None = None
