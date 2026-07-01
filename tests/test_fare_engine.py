@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from fare.calculator import RoundTripResult, calculate_round_trips, js_round
 from fare.exporter import export_results_to_excel, results_to_tsv, to_erp_rows
@@ -280,6 +281,71 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("완료", app._job_status_text(app.job_queue[0]))
         self.assertIn("성공 1", app._job_status_text(app.job_queue[0]))
         self.assertIn("건너뜀 1", app._job_status_text(app.job_queue[0]))
+
+    def test_add_current_sheet_to_job_queue_accepts_hotel_only_condition(self):
+        class Var:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.is_running = False
+        app.job_queue = []
+        app.editing_job_index = None
+        app.price_desc_var = Var("")
+        app.hotel_name_var = Var("두짓비치 괌")
+        app.read_sheet_data = lambda: ([{"date": "2026-07-15", "date_end": "2026-07-15"}], [])
+        app._apply_date_filter = lambda rows: rows
+        app._selected_airline_code = lambda: ""
+        app._set_job_queue = lambda jobs, select_index=None: setattr(app, "job_queue", [app._normalize_job(job) for job in jobs])
+        app._clear_sheet_after_job_registration = lambda: setattr(app, "sheet_cleared", True)
+        app._select_job_index = lambda index: setattr(app, "selected_job_index", index)
+        app.set_status = lambda *_args, **_kwargs: None
+        app.accent_green = "#22c55e"
+
+        with mock.patch("gui.messagebox.askyesno", return_value=True) as askyesno:
+            app.add_current_sheet_to_job_queue()
+
+        self.assertEqual(len(app.job_queue), 1)
+        self.assertEqual(app.job_queue[0]["price_desc"], "")
+        self.assertEqual(app.job_queue[0]["airline_code"], "")
+        self.assertEqual(app.job_queue[0]["hotel_name"], "두짓비치 괌")
+        self.assertTrue(app.sheet_cleared)
+        confirm_msg = askyesno.call_args.args[1]
+        self.assertIn("요금구분: 전체 요금구분", confirm_msg)
+        self.assertIn("항공사: 전체 항공사", confirm_msg)
+        self.assertIn("호텔명: 두짓비치 괌", confirm_msg)
+
+    def test_add_current_sheet_to_job_queue_cancel_keeps_queue_unchanged(self):
+        class Var:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.is_running = False
+        app.job_queue = []
+        app.editing_job_index = None
+        app.price_desc_var = Var("괌_저녁_3박")
+        app.hotel_name_var = Var("")
+        app.read_sheet_data = lambda: ([{"date": "2026-07-15", "date_end": "2026-07-15"}], [])
+        app._apply_date_filter = lambda rows: rows
+        app._selected_airline_code = lambda: ""
+        app._set_job_queue = lambda *_args, **_kwargs: self.fail("queue should not be updated")
+        app._clear_sheet_after_job_registration = lambda: setattr(app, "sheet_cleared", True)
+        app._select_job_index = lambda *_args, **_kwargs: None
+        app.set_status = lambda *_args, **_kwargs: None
+        app.accent_green = "#22c55e"
+
+        with mock.patch("gui.messagebox.askyesno", return_value=False):
+            app.add_current_sheet_to_job_queue()
+
+        self.assertEqual(app.job_queue, [])
+        self.assertFalse(hasattr(app, "sheet_cleared"))
 
     def test_calculation_debug_groups_round_trips_by_night(self):
         result = calculate_round_trips(

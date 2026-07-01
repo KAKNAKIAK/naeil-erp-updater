@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.5"
+APP_VERSION = "v5.0.6"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -3705,8 +3705,8 @@ class RpaGuiApp:
         price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
         hotel_name = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
         progress_text = ''
-        if not price_desc or not airline_code:
-            messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분과 항공사코드를 먼저 입력해 주세요.')
+        if not any([price_desc, airline_code, hotel_name]):
+            messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분, 항공사코드, 호텔명 중 하나 이상 입력해 주세요.')
             return
         rows_for_job = []
         for row in filtered:
@@ -3725,6 +3725,16 @@ class RpaGuiApp:
             'source': '입력표',
         })
         replace_index = self.editing_job_index
+        confirm_action = '수정 반영' if replace_index is not None and 0 <= replace_index < len(self.job_queue) else '추가'
+        confirm_msg = (
+            f"아래 조건으로 작업 목록에 {confirm_action}할까요?\n\n"
+            f"요금구분: {price_desc or '전체 요금구분'}\n"
+            f"항공사: {airline_code or '전체 항공사'}\n"
+            f"호텔명: {hotel_name or '전체 호텔'}\n"
+            f"대상 행: {len(rows_for_job)}건"
+        )
+        if not messagebox.askyesno('작업 목록 확인', confirm_msg):
+            return
         if replace_index is not None and 0 <= replace_index < len(self.job_queue):
             self.job_queue[replace_index] = new_job
             select_index = replace_index

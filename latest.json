@@ -1,12 +1,10 @@
 {
-    "version":  "v5.0.5",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.5/NaeilERPUpdater_Setup_v5.0.5.exe",
-    "sha256":  "ECAAB8DA6B1AE4576BAF20DFCFB8EADABAC90971696E15F8DA6642CC9CA7779E",
+    "version":  "v5.0.6",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.6/NaeilERPUpdater_Setup_v5.0.6.exe",
+    "sha256":  "AB47B2ABC6C727DC5E2E4928C7D37AB57B59291EE5B05BC37F785ADE546B764F",
     "notes":  [
-                  "작업 목록으로 여러 요금구분·항공사·호텔명 조건을 순서대로 실행할 수 있습니다.",
-                  "작업 목록에 진행상황 컬럼을 추가해 작업별 성공·실패·건너뜀 건수를 표시합니다.",
-                  "조건열 엑셀 불러오기와 입력표 재불러오기, 대기열 순서 변경을 지원합니다.",
-                  "호텔명 필터는 ERP hotelSeq 매칭을 확인하고 다른 호텔 행이 섞이면 저장 전에 중단합니다.",
-                  "진행구분 입력 필드는 제거하고, 예약마감 처리는 요금칸 텍스트 입력 방식으로 유지합니다."
+                  "작업 목록 추가 조건을 요금구분·항공사코드·호텔명 중 하나 이상 입력으로 완화했습니다.",
+                  "작업 목록에 추가하거나 수정 반영하기 전에 조건과 대상 행 수를 확인할 수 있습니다.",
+                  "확인창에서 취소하면 입력표와 작업 목록을 변경하지 않습니다."
               ]
 }
