@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.9",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.9/NaeilERPUpdater_Setup_v5.0.9.exe",
-    "sha256":  "BF96CD3C4E72AC538BA49BAE6170F9AE990E71CB89164813B15BC6D434CB7A12",
+    "version":  "v5.0.10",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.10/NaeilERPUpdater_Setup_v5.0.10.exe",
+    "sha256":  "F2864A7C51BCD5D49DEC6CE5B0FAF8948997B2EB23789003944C41AA661EE2F2",
     "notes":  [
-                  "작업목록 실행 시 첫 작업의 hotelSeq가 뒤쪽 호텔 작업에 남아 검증되는 문제를 수정했습니다.",
-                  "작업목록 행은 자기 작업의 요금구분, 항공사, 호텔명, hotelSeq만 사용합니다.",
-                  "hotelSeq가 없는 호텔명 작업은 이전 작업의 hotelSeq를 물려받지 않고 ERP 자동매칭 결과 기준으로 처리합니다."
+                  "호텔명을 텍스트로 입력한 작업은 ERP 자동매칭 hotelSeq를 신뢰해 진행합니다.",
+                  "호텔 DB 후보를 사용자가 직접 선택한 작업만 hotelSeq 불일치 시 저장 전에 중단합니다.",
+                  "작업목록과 보고서에는 일반 텍스트 호텔과 DB 선택 호텔을 구분해 표시합니다."
               ]
 }

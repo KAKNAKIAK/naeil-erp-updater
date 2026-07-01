@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.9"
+APP_VERSION = "v5.0.10"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -322,10 +322,12 @@ class RpaGuiApp:
         self.hotel_search_request_id = 0
         self.hotel_result_records = []
         self.current_hotel_seq = ''
+        self.current_hotel_seq_strict = False
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
+        self.selected_hotel_seq_strict = False
         self.selected_progress_text = ''
         self.night_vars = {}
         self.night_chip_buttons = {}
@@ -1637,23 +1639,36 @@ class RpaGuiApp:
         ]
         return matches[0] if len(matches) == 1 else None
 
-    def _select_hotel_record(self, record):
+    def _select_hotel_record(self, record, strict=True):
         if not record:
             self.current_hotel_seq = ''
+            self.current_hotel_seq_strict = False
             return
         self.current_hotel_seq = str(record.get('seq') or '').strip()
+        self.current_hotel_seq_strict = bool(strict and self.current_hotel_seq)
         self.hotel_name_var.set(str(record.get('name') or '').strip())
 
     def _selected_hotel_filter(self):
+        hotel_name, hotel_seq, _hotel_seq_strict = self._selected_hotel_filter_with_strict()
+        return hotel_name, hotel_seq
+
+    def _selected_hotel_filter_with_strict(self):
         text = self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else ''
         text = '' if text is None else str(text).strip()
         if not text:
-            return '', ''
+            return '', '', False
         record = self._hotel_record_from_text(text)
         if record:
-            return str(record.get('name') or '').strip(), str(record.get('seq') or '').strip()
+            seq = str(record.get('seq') or '').strip()
+            strict = bool(
+                seq
+                and getattr(self, 'current_hotel_seq_strict', False)
+                and str(getattr(self, 'current_hotel_seq', '') or '').strip() == seq
+            )
+            return str(record.get('name') or '').strip(), seq, strict
         self.current_hotel_seq = ''
-        return text, ''
+        self.current_hotel_seq_strict = False
+        return text, '', False
 
     def _remember_imported_hotel_condition(self, hotel_name, hotel_seq=''):
         hotel_name = '' if hotel_name is None else str(hotel_name).strip()
@@ -1685,10 +1700,11 @@ class RpaGuiApp:
             self.hotel_record_by_seq = {item['seq']: item for item in existing}
             if hasattr(self, 'hotel_name_combo'):
                 self.hotel_name_combo.config(values=[item['label'] for item in existing])
-            self._select_hotel_record(record)
+            self._select_hotel_record(record, strict=False)
             return
 
         self.current_hotel_seq = ''
+        self.current_hotel_seq_strict = False
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set(hotel_name)
 
@@ -1701,12 +1717,13 @@ class RpaGuiApp:
         if event is not None and getattr(event, 'keysym', '') in {'Return', 'Tab', 'Shift_L', 'Shift_R', 'Up', 'Down', 'Left', 'Right'}:
             return
         self.current_hotel_seq = ''
+        self.current_hotel_seq_strict = False
         self._schedule_hotel_auto_search()
 
     def _on_hotel_combo_focus_out(self, event=None):
         record = self._hotel_record_from_text(self.hotel_name_var.get())
         if record:
-            self._select_hotel_record(record)
+            self._select_hotel_record(record, strict=False)
 
     def _schedule_hotel_auto_search(self):
         if getattr(self, 'hotel_search_after_id', None):
@@ -3239,6 +3256,7 @@ class RpaGuiApp:
             'price_desc_text': self.price_desc_var.get() if hasattr(self, 'price_desc_var') else '',
             'hotel_name_text': self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else '',
             'hotel_seq_text': getattr(self, 'current_hotel_seq', ''),
+            'hotel_seq_strict': bool(getattr(self, 'current_hotel_seq_strict', False)),
             'progress_text': self.progress_text_var.get() if hasattr(self, 'progress_text_var') else '',
             'active_cell': tuple(self._active_cell) if hasattr(self, '_active_cell') else (0, 0),
         }
@@ -3290,6 +3308,7 @@ class RpaGuiApp:
             if hasattr(self, 'hotel_name_var'):
                 self.hotel_name_var.set(snapshot.get('hotel_name_text') or '')
             self.current_hotel_seq = snapshot.get('hotel_seq_text') or ''
+            self.current_hotel_seq_strict = bool(snapshot.get('hotel_seq_strict', False))
             if hasattr(self, 'progress_text_var'):
                 self.progress_text_var.set(snapshot.get('progress_text') or '')
             active = snapshot.get('active_cell') or (0, 0)
@@ -3790,12 +3809,14 @@ class RpaGuiApp:
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
         self.current_hotel_seq = ''
+        self.current_hotel_seq_strict = False
         if hasattr(self, 'progress_text_var'):
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
+        self.selected_hotel_seq_strict = False
         self.selected_progress_text = ''
         self.fares_data = []
         self.editing_job_index = None
@@ -3827,14 +3848,22 @@ class RpaGuiApp:
                 return str(code).strip().upper()
         return upper
 
+    @staticmethod
+    def _bool_flag(value):
+        if isinstance(value, bool):
+            return value
+        text = '' if value is None else str(value).strip().lower()
+        return text in {'1', 'true', 'y', 'yes', 'on', 'strict'}
+
     def _job_condition_text(self, job):
         price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
         airline = str(job.get('airline_code') or '').strip() or '전체 항공사'
         hotel_name = str(job.get('hotel_name') or '').strip()
         hotel_seq = str(job.get('hotel_seq') or '').strip()
+        hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and hotel_seq)
         parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}']
         if hotel_name:
-            hotel_label = f'{hotel_name} (hotelSeq {hotel_seq})' if hotel_seq else hotel_name
+            hotel_label = f'{hotel_name} (hotelSeq {hotel_seq})' if hotel_seq_strict else hotel_name
             parts.append(f'호텔명 : {hotel_label}')
         return ' / '.join(parts)
 
@@ -3844,12 +3873,18 @@ class RpaGuiApp:
         airline_code = self._normalize_job_airline_code(job.get('airline_code'))
         hotel_name = str(job.get('hotel_name') or '').strip()
         hotel_seq = str(job.get('hotel_seq') or '').strip()
+        hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and hotel_seq)
         progress_text = str(job.get('progress_text') or '').strip()
         for row in rows:
             row['price_desc'] = str(row.get('price_desc') or price_desc).strip()
             row['airline_code'] = self._normalize_job_airline_code(row.get('airline_code') or airline_code)
             row['hotel_name'] = str(row.get('hotel_name') or hotel_name).strip()
             row['hotel_seq'] = str(row.get('hotel_seq') or hotel_seq).strip()
+            row_seq_strict = row.get('hotel_seq_strict')
+            if row_seq_strict is None:
+                row['hotel_seq_strict'] = bool(hotel_seq_strict and row['hotel_seq'] == hotel_seq)
+            else:
+                row['hotel_seq_strict'] = bool(self._bool_flag(row_seq_strict) and row['hotel_seq'])
             row['progress_status'] = str(row.get('progress_status') or progress_text).strip()
         progress = dict(job.get('_progress') or {})
         progress.setdefault('status', '대기')
@@ -3863,6 +3898,7 @@ class RpaGuiApp:
             'airline_code': airline_code,
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
+            'hotel_seq_strict': hotel_seq_strict,
             'progress_text': progress_text,
             'rows': rows,
             'source': str(job.get('source') or '').strip(),
@@ -4070,12 +4106,14 @@ class RpaGuiApp:
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
         self.current_hotel_seq = ''
+        self.current_hotel_seq_strict = False
         if hasattr(self, 'progress_text_var'):
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
+        self.selected_hotel_seq_strict = False
         self.selected_progress_text = ''
         self.fares_data = []
         self.editing_job_index = None
@@ -4102,7 +4140,7 @@ class RpaGuiApp:
             return
         airline_code = self._selected_airline_code()
         price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
-        hotel_name, hotel_seq = self._selected_hotel_filter()
+        hotel_name, hotel_seq, hotel_seq_strict = self._selected_hotel_filter_with_strict()
         progress_text = ''
         if not any([price_desc, airline_code, hotel_name]):
             messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분, 항공사코드, 호텔명 중 하나 이상 입력해 주세요.')
@@ -4114,6 +4152,7 @@ class RpaGuiApp:
             item['airline_code'] = airline_code
             item['hotel_name'] = hotel_name
             item['hotel_seq'] = hotel_seq
+            item['hotel_seq_strict'] = hotel_seq_strict
             item['progress_status'] = str(item.get('progress_status') or progress_text).strip()
             rows_for_job.append(item)
         new_job = self._normalize_job({
@@ -4121,6 +4160,7 @@ class RpaGuiApp:
             'airline_code': airline_code,
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
+            'hotel_seq_strict': hotel_seq_strict,
             'progress_text': progress_text,
             'rows': rows_for_job,
             'source': '입력표',
@@ -4128,10 +4168,10 @@ class RpaGuiApp:
         replace_index = self.editing_job_index
         confirm_action = '수정 반영' if replace_index is not None and 0 <= replace_index < len(self.job_queue) else '추가'
         hotel_confirm_text = hotel_name or '전체 호텔'
-        if hotel_seq:
+        if hotel_seq and hotel_seq_strict:
             hotel_confirm_text = f'{hotel_confirm_text} (hotelSeq {hotel_seq})'
         elif hotel_name:
-            hotel_confirm_text = f'{hotel_confirm_text} (ERP DB 미선택)'
+            hotel_confirm_text = f'{hotel_confirm_text} (호텔명 기준)'
         confirm_msg = (
             f"아래 조건으로 작업 목록에 {confirm_action}할까요?\n\n"
             f"요금구분: {price_desc or '전체 요금구분'}\n"
@@ -4222,6 +4262,7 @@ class RpaGuiApp:
         self._select_airline_code(job.get('airline_code') or '', overwrite_blank_only=False)
         self.hotel_name_var.set(str(job.get('hotel_name') or ''))
         self.current_hotel_seq = str(job.get('hotel_seq') or '').strip()
+        self.current_hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and self.current_hotel_seq)
         self.progress_text_var.set(str(job.get('progress_text') or ''))
         self._set_source_badge(f"편집 중: {self._job_condition_text(job)}")
         if not self.panel_expanded:
@@ -4956,12 +4997,13 @@ class RpaGuiApp:
             pass
 
     def _current_direct_run_conditions(self):
-        hotel_name, hotel_seq = self._selected_hotel_filter()
+        hotel_name, hotel_seq, hotel_seq_strict = self._selected_hotel_filter_with_strict()
         return {
             'price_desc': self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else '',
             'airline_code': self._selected_airline_code(),
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
+            'hotel_seq_strict': hotel_seq_strict,
         }
 
     @staticmethod
@@ -4983,6 +5025,7 @@ class RpaGuiApp:
             if hotel_name:
                 pending['hotel_name'] = hotel_name
                 pending['hotel_seq'] = str(erp_conditions.get('hotel_seq') or '').strip()
+                pending['hotel_seq_strict'] = False
         return pending
 
     def _format_erp_condition_import_message(self, pending):
@@ -5118,6 +5161,10 @@ class RpaGuiApp:
             'price_desc': value_for('price_desc', self.selected_price_desc),
             'hotel_name': value_for('hotel_name', self.selected_hotel_name),
             'hotel_seq': value_for('hotel_seq', self.selected_hotel_seq),
+            'hotel_seq_strict': bool(
+                self._bool_flag(value_for('hotel_seq_strict', self.selected_hotel_seq_strict))
+                and value_for('hotel_seq', self.selected_hotel_seq)
+            ),
             'progress_text': value_for('progress_status', self.selected_progress_text),
         }
 
@@ -5161,6 +5208,7 @@ class RpaGuiApp:
             self.selected_price_desc = first_job.get('price_desc') or ''
             self.selected_hotel_name = first_job.get('hotel_name') or ''
             self.selected_hotel_seq = first_job.get('hotel_seq') or ''
+            self.selected_hotel_seq_strict = bool(self._bool_flag(first_job.get('hotel_seq_strict')) and self.selected_hotel_seq)
             self.selected_progress_text = first_job.get('progress_text') or ''
             self._reset_job_progress_for_run(jobs)
         else:
@@ -5185,17 +5233,20 @@ class RpaGuiApp:
             self.selected_price_desc = str(run_conditions.get('price_desc') or '').strip()
             self.selected_hotel_name = str(run_conditions.get('hotel_name') or '').strip()
             self.selected_hotel_seq = str(run_conditions.get('hotel_seq') or '').strip()
+            self.selected_hotel_seq_strict = bool(self._bool_flag(run_conditions.get('hotel_seq_strict')) and self.selected_hotel_seq)
             self.selected_progress_text = ''
             for row in self.fares_data:
                 row['price_desc'] = self.selected_price_desc
                 row['airline_code'] = self.selected_airline_code
                 row['hotel_name'] = self.selected_hotel_name
                 row['hotel_seq'] = self.selected_hotel_seq
+                row['hotel_seq_strict'] = self.selected_hotel_seq_strict
             self.rpa_jobs_to_run = [{
                 'price_desc': self.selected_price_desc,
                 'airline_code': self.selected_airline_code,
                 'hotel_name': self.selected_hotel_name,
                 'hotel_seq': self.selected_hotel_seq,
+                'hotel_seq_strict': self.selected_hotel_seq_strict,
                 'progress_text': self.selected_progress_text,
                 'rows': filtered,
                 'source': '입력표',
@@ -7148,6 +7199,8 @@ class RpaGuiApp:
                 price_desc = row_conditions['price_desc']
                 hotel_name = row_conditions['hotel_name']
                 hotel_seq = row_conditions['hotel_seq']
+                hotel_seq_strict = bool(row_conditions['hotel_seq_strict'])
+                expected_hotel_seq = hotel_seq if hotel_seq_strict else ''
                 progress_text = row_conditions['progress_text']
                 progress_code, progress_label = self._progress_status_from_text(progress_text)
 
@@ -7202,12 +7255,13 @@ class RpaGuiApp:
                     hotel_result = self._set_erp_hotel_filter(
                         selectors,
                         hotel_name,
-                        expected_seq=hotel_seq,
+                        expected_seq=expected_hotel_seq,
                         timeout=min(driver_timeout, 4),
                         poll=erp_poll_interval,
                     )
                     if hotel_name:
-                        print(f" -> 호텔명 필터 설정: {hotel_result.get('value') or hotel_name} (hotelSeq={hotel_result.get('seq')})")
+                        strict_note = ' / DB선택 검증' if expected_hotel_seq else ' / 호텔명 자동매칭'
+                        print(f" -> 호텔명 필터 설정: {hotel_result.get('value') or hotel_name} (hotelSeq={hotel_result.get('seq')}{strict_note})")
                     elif index == 0:
                         print(" -> 호텔명 필터 초기화: 전체 호텔 대상")
 
