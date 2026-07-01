@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.8"
+APP_VERSION = "v5.0.9"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -5103,6 +5103,24 @@ class RpaGuiApp:
         self._apply_imported_erp_conditions(pending)
         return self._current_direct_run_conditions()
 
+    def _rpa_row_conditions(self, row):
+        row = row or {}
+        is_job_queue_row = row.get('_job_index') is not None
+
+        def value_for(field, selected_value=''):
+            value = str(row.get(field) or '').strip()
+            if value or is_job_queue_row:
+                return value
+            return str(selected_value or '').strip()
+
+        return {
+            'airline_code': value_for('airline_code', self.selected_airline_code).upper(),
+            'price_desc': value_for('price_desc', self.selected_price_desc),
+            'hotel_name': value_for('hotel_name', self.selected_hotel_name),
+            'hotel_seq': value_for('hotel_seq', self.selected_hotel_seq),
+            'progress_text': value_for('progress_status', self.selected_progress_text),
+        }
+
     # ------------------------------------------------------------------
     # RPA 실행 제어
     # ------------------------------------------------------------------
@@ -7125,11 +7143,12 @@ class RpaGuiApp:
                 adult_profit = str(row.get("adult_profit", "")).strip()
                 child_val = str(row.get("child_fare", "")).strip()
                 infant_val = str(row.get("infant_fare", "")).strip()
-                airline_code = str(row.get("airline_code") or self.selected_airline_code or "").strip().upper()
-                price_desc = str(row.get("price_desc") or self.selected_price_desc or "").strip()
-                hotel_name = str(row.get("hotel_name") or self.selected_hotel_name or "").strip()
-                hotel_seq = str(row.get("hotel_seq") or self.selected_hotel_seq or "").strip()
-                progress_text = str(row.get("progress_status") or self.selected_progress_text or "").strip()
+                row_conditions = self._rpa_row_conditions(row)
+                airline_code = row_conditions['airline_code']
+                price_desc = row_conditions['price_desc']
+                hotel_name = row_conditions['hotel_name']
+                hotel_seq = row_conditions['hotel_seq']
+                progress_text = row_conditions['progress_text']
                 progress_code, progress_label = self._progress_status_from_text(progress_text)
 
                 print(f"\n========================================================")

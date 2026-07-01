@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.8",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.8/NaeilERPUpdater_Setup_v5.0.8.exe",
-    "sha256":  "0DE8098B1BBF4095E974759083FD44D2959001BC056B9BA18C8047472424F19F",
+    "version":  "v5.0.9",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.9/NaeilERPUpdater_Setup_v5.0.9.exe",
+    "sha256":  "BF96CD3C4E72AC538BA49BAE6170F9AE990E71CB89164813B15BC6D434CB7A12",
     "notes":  [
-                  "프로그램 조건이 비어 있을 때 ERP 화면의 요금구분, 항공사, 호텔명 조건을 가져올지 실행 전에 확인합니다.",
-                  "ERP 화면 조건을 가져오면 호텔명은 hotelSeq까지 함께 보존해 실행 조건으로 사용합니다.",
-                  "아니오를 선택하면 기존처럼 프로그램에 입력된 조건 그대로 실행합니다."
+                  "작업목록 실행 시 첫 작업의 hotelSeq가 뒤쪽 호텔 작업에 남아 검증되는 문제를 수정했습니다.",
+                  "작업목록 행은 자기 작업의 요금구분, 항공사, 호텔명, hotelSeq만 사용합니다.",
+                  "hotelSeq가 없는 호텔명 작업은 이전 작업의 hotelSeq를 물려받지 않고 ERP 자동매칭 결과 기준으로 처리합니다."
               ]
 }

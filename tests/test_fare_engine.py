@@ -415,6 +415,39 @@ class FareEngineTest(unittest.TestCase):
 
         self.assertEqual(pending, {"hotel_name": "아미아나 나트랑", "hotel_seq": "7864"})
 
+    def test_job_queue_row_conditions_do_not_fallback_to_first_job_hotel_seq(self):
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.selected_price_desc = "김괌"
+        app.selected_airline_code = ""
+        app.selected_hotel_name = "괌 플라자 호텔"
+        app.selected_hotel_seq = "6195"
+        app.selected_progress_text = ""
+
+        job_row = {
+            "_job_index": 2,
+            "price_desc": "김괌",
+            "airline_code": "",
+            "hotel_name": "괌 니코 호텔",
+            "hotel_seq": "",
+            "progress_status": "",
+        }
+        direct_row = {
+            "price_desc": "",
+            "airline_code": "",
+            "hotel_name": "",
+            "hotel_seq": "",
+            "progress_status": "",
+        }
+
+        job_conditions = app._rpa_row_conditions(job_row)
+        direct_conditions = app._rpa_row_conditions(direct_row)
+
+        self.assertEqual(job_conditions["hotel_name"], "괌 니코 호텔")
+        self.assertEqual(job_conditions["hotel_seq"], "")
+        self.assertEqual(job_conditions["price_desc"], "김괌")
+        self.assertEqual(direct_conditions["hotel_name"], "괌 플라자 호텔")
+        self.assertEqual(direct_conditions["hotel_seq"], "6195")
+
     def test_job_progress_status_counts_results(self):
         class Root:
             def after(self, _delay, func):
