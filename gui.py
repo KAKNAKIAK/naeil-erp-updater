@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.6"
+APP_VERSION = "v5.0.7"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -314,9 +314,18 @@ class RpaGuiApp:
         self.airline_value_by_label = {}
         self.airline_label_by_value = {}
         self.airline_refresh_thread = None
+        self.hotel_choices = []
+        self.hotel_record_by_label = {}
+        self.hotel_record_by_seq = {}
+        self.hotel_search_thread = None
+        self.hotel_search_after_id = None
+        self.hotel_search_request_id = 0
+        self.hotel_result_records = []
+        self.current_hotel_seq = ''
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
+        self.selected_hotel_seq = ''
         self.selected_progress_text = ''
         self.night_vars = {}
         self.night_chip_buttons = {}
@@ -994,29 +1003,48 @@ class RpaGuiApp:
         self.price_desc_entry.pack(side=tk.LEFT, ipady=3)
         tk.Label(
             search_filter_bar,
-            text='호텔명',
+            text='호텔명 검색',
             font=('맑은 고딕', 9, 'bold'),
             bg=self.card_color,
             fg=self.fg_color,
         ).pack(side=tk.LEFT, padx=(16, 6))
-        self.hotel_name_entry = tk.Entry(
+        self.hotel_name_combo = ttk.Combobox(
             search_filter_bar,
             textvariable=self.hotel_name_var,
+            values=[],
             width=20,
-            bg=self.input_bg,
-            fg=self.fg_color,
-            insertbackground='white',
-            bd=0,
-            relief=tk.FLAT,
-            highlightbackground=self.border_color,
-            highlightcolor=self.accent_color,
-            highlightthickness=1,
             font=('맑은 고딕', 9),
         )
+        self.hotel_name_entry = self.hotel_name_combo
         self.hotel_name_entry.pack(side=tk.LEFT, ipady=3)
+        self.hotel_name_entry.bind('<<ComboboxSelected>>', self._on_hotel_combo_selected)
+        self.hotel_name_entry.bind('<Return>', self._run_hotel_search_now)
+        self.hotel_name_entry.bind('<KeyRelease>', self._on_hotel_combo_typed)
+        self.hotel_name_entry.bind('<FocusOut>', self._on_hotel_combo_focus_out)
+
+        self.hotel_result_frame = tk.Frame(sheet_card, bg=self.card_color)
+        self.hotel_result_list = tk.Listbox(
+            self.hotel_result_frame,
+            height=5,
+            bg=self.input_bg,
+            fg=self.fg_color,
+            selectbackground=self.accent_color,
+            selectforeground='white',
+            activestyle='none',
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            font=('맑은 고딕', 9),
+        )
+        self.hotel_result_list.pack(fill=tk.X)
+        self.hotel_result_list.bind('<ButtonRelease-1>', self._on_hotel_result_selected)
+        self.hotel_result_list.bind('<Return>', self._on_hotel_result_selected)
+        self.hotel_result_list.bind('<Double-Button-1>', self._on_hotel_result_selected)
 
         # 수식 입력줄(formula bar): '=' 식 편집 중 표의 칸을 클릭하면 참조가 삽입된다
         fb_frame = tk.Frame(sheet_card, bg=self.card_color)
+        self.formula_frame = fb_frame
         fb_frame.pack(fill=tk.X, pady=(0, 6))
         tk.Label(fb_frame, text='fx', font=('맑은 고딕', 10, 'bold'), bg=self.card_color, fg=self.accent_orange).pack(side=tk.LEFT, padx=(0, 6))
         self.active_lbl = tk.Label(fb_frame, text='', width=13, anchor=tk.W, font=('맑은 고딕', 8), bg=self.card_color, fg=self.fg_muted)
@@ -1492,6 +1520,329 @@ class RpaGuiApp:
             selector,
         )
         return [(item.get('value', ''), item.get('text', '')) for item in options or []]
+
+    def _format_hotel_label(self, record):
+        name = str(record.get('name') or '').strip()
+        seq = str(record.get('seq') or '').strip()
+        city = str(record.get('city') or '').strip()
+        nation = str(record.get('nation') or '').strip()
+        parts = [name]
+        area = ' / '.join(part for part in (nation, city) if part)
+        if area:
+            parts.append(area)
+        if seq:
+            parts.append(f'hotelSeq {seq}')
+        return ' · '.join(part for part in parts if part)
+
+    def _format_hotel_result_line(self, record):
+        name = str(record.get('name') or '').strip()
+        nation = str(record.get('nation') or '').strip()
+        city = str(record.get('city') or '').strip()
+        seq = str(record.get('seq') or '').strip()
+        path_parts = ['호텔'] + [part for part in (nation, city) if part]
+        path = ' > '.join(path_parts)
+        suffix = f' · hotelSeq {seq}' if seq else ''
+        return f'{name}    {path}{suffix}'
+
+    def _normalize_hotel_record(self, raw):
+        raw = raw or {}
+        seq = str(raw.get('infoSeq') or raw.get('hotelSeq') or raw.get('seq') or '').strip()
+        name = str(raw.get('infoTitle') or raw.get('hotelKorNm') or raw.get('name') or raw.get('korNm') or '').strip()
+        if not seq or not name:
+            return None
+        record = {
+            'seq': seq,
+            'name': name,
+            'eng_name': str(raw.get('infoEngTitle') or raw.get('engName') or '').strip(),
+            'nation': str(raw.get('natNm') or raw.get('nation') or '').strip(),
+            'city': str(raw.get('cityNm') or raw.get('city') or '').strip(),
+            'use_yn': str(raw.get('useYn') or '').strip(),
+            'sort_order': raw.get('sortOrder'),
+        }
+        record['label'] = self._format_hotel_label(record)
+        return record
+
+    def _set_hotel_choices(self, records):
+        current_name, current_seq = self._selected_hotel_filter() if hasattr(self, 'hotel_record_by_label') else ('', '')
+        normalized = []
+        seen = set()
+        for raw in records or []:
+            record = self._normalize_hotel_record(raw)
+            if not record or record['seq'] in seen:
+                continue
+            seen.add(record['seq'])
+            normalized.append(record)
+
+        self.hotel_choices = normalized
+        self.hotel_record_by_label = {record['label']: record for record in normalized}
+        self.hotel_record_by_seq = {record['seq']: record for record in normalized}
+        if hasattr(self, 'hotel_name_combo'):
+            self.hotel_name_combo.config(values=[record['label'] for record in normalized])
+        if current_seq and current_seq in self.hotel_record_by_seq:
+            self.current_hotel_seq = current_seq
+            self.hotel_name_var.set(current_name)
+
+    def _show_hotel_result_message(self, message):
+        self.hotel_result_records = []
+        if not hasattr(self, 'hotel_result_list'):
+            return
+        self.hotel_result_list.delete(0, tk.END)
+        self.hotel_result_list.insert(tk.END, message)
+        self.hotel_result_list.itemconfig(0, foreground=self.fg_muted)
+        if hasattr(self, 'hotel_result_frame') and not self.hotel_result_frame.winfo_ismapped():
+            pack_kwargs = {'fill': tk.X, 'pady': (0, 6)}
+            if hasattr(self, 'formula_frame'):
+                pack_kwargs['before'] = self.formula_frame
+            self.hotel_result_frame.pack(**pack_kwargs)
+
+    def _show_hotel_result_records(self, records):
+        self.hotel_result_records = list(records or [])
+        if not hasattr(self, 'hotel_result_list'):
+            return
+        self.hotel_result_list.delete(0, tk.END)
+        if not self.hotel_result_records:
+            self._show_hotel_result_message('검색 결과 없음')
+            return
+        for record in self.hotel_result_records:
+            self.hotel_result_list.insert(tk.END, self._format_hotel_result_line(record))
+        if hasattr(self, 'hotel_result_frame') and not self.hotel_result_frame.winfo_ismapped():
+            pack_kwargs = {'fill': tk.X, 'pady': (0, 6)}
+            if hasattr(self, 'formula_frame'):
+                pack_kwargs['before'] = self.formula_frame
+            self.hotel_result_frame.pack(**pack_kwargs)
+
+    def _hide_hotel_results(self):
+        self.hotel_result_records = []
+        try:
+            self.hotel_result_list.delete(0, tk.END)
+            self.hotel_result_frame.pack_forget()
+        except Exception:
+            pass
+
+    def _hotel_record_from_text(self, text):
+        text = '' if text is None else str(text).strip()
+        if not text:
+            return None
+        record = getattr(self, 'hotel_record_by_label', {}).get(text)
+        if record:
+            return record
+        current_seq = str(getattr(self, 'current_hotel_seq', '') or '').strip()
+        if current_seq:
+            record = getattr(self, 'hotel_record_by_seq', {}).get(current_seq)
+            if record and str(record.get('name') or '').strip() == text:
+                return record
+        matches = [
+            record for record in getattr(self, 'hotel_choices', [])
+            if str(record.get('name') or '').strip() == text
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _select_hotel_record(self, record):
+        if not record:
+            self.current_hotel_seq = ''
+            return
+        self.current_hotel_seq = str(record.get('seq') or '').strip()
+        self.hotel_name_var.set(str(record.get('name') or '').strip())
+
+    def _selected_hotel_filter(self):
+        text = self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else ''
+        text = '' if text is None else str(text).strip()
+        if not text:
+            return '', ''
+        record = self._hotel_record_from_text(text)
+        if record:
+            return str(record.get('name') or '').strip(), str(record.get('seq') or '').strip()
+        self.current_hotel_seq = ''
+        return text, ''
+
+    def _on_hotel_combo_selected(self, event=None):
+        record = self._hotel_record_from_text(self.hotel_name_var.get())
+        self._select_hotel_record(record)
+        self._hide_hotel_results()
+
+    def _on_hotel_combo_typed(self, event=None):
+        if event is not None and getattr(event, 'keysym', '') in {'Return', 'Tab', 'Shift_L', 'Shift_R', 'Up', 'Down', 'Left', 'Right'}:
+            return
+        self.current_hotel_seq = ''
+        self._schedule_hotel_auto_search()
+
+    def _on_hotel_combo_focus_out(self, event=None):
+        record = self._hotel_record_from_text(self.hotel_name_var.get())
+        if record:
+            self._select_hotel_record(record)
+
+    def _schedule_hotel_auto_search(self):
+        if getattr(self, 'hotel_search_after_id', None):
+            try:
+                self.root.after_cancel(self.hotel_search_after_id)
+            except Exception:
+                pass
+            self.hotel_search_after_id = None
+        keyword = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
+        if not keyword:
+            self._hide_hotel_results()
+            return
+        self._show_hotel_result_message('검색 중...')
+        self.hotel_search_after_id = self.root.after(
+            450,
+            lambda kw=keyword: self.refresh_hotel_options_from_erp(silent=True, keyword=kw, auto=True),
+        )
+
+    def _run_hotel_search_now(self, event=None):
+        if getattr(self, 'hotel_search_after_id', None):
+            try:
+                self.root.after_cancel(self.hotel_search_after_id)
+            except Exception:
+                pass
+            self.hotel_search_after_id = None
+        self.refresh_hotel_options_from_erp(silent=True, auto=True)
+        return 'break'
+
+    def _on_hotel_result_selected(self, event=None):
+        if not hasattr(self, 'hotel_result_list'):
+            return
+        selection = self.hotel_result_list.curselection()
+        if not selection:
+            return
+        index = int(selection[0])
+        if not (0 <= index < len(self.hotel_result_records)):
+            return
+        record = self.hotel_result_records[index]
+        self._select_hotel_record(record)
+        self._hide_hotel_results()
+        self.set_status(
+            f"호텔 선택: {record.get('name')} (hotelSeq {record.get('seq')})",
+            self.accent_green,
+        )
+
+    def refresh_hotel_options_from_erp(self, silent=False, keyword=None, auto=False):
+        if getattr(self, 'is_running', False):
+            if not silent:
+                messagebox.showwarning('실행 중', 'ERP 실행 중에는 호텔 목록을 검색할 수 없습니다.')
+            return
+        keyword = (keyword if keyword is not None else (self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else ''))
+        keyword = '' if keyword is None else str(keyword).strip()
+        if not keyword:
+            self._hide_hotel_results()
+            if not silent and not auto:
+                messagebox.showwarning('호텔검색', '검색할 호텔명 일부를 먼저 입력해 주세요.')
+            return
+        if not silent:
+            self.set_status(f"ERP 호텔 DB에서 '{keyword}' 검색 중입니다…", self.accent_orange)
+        self.hotel_search_request_id += 1
+        request_id = self.hotel_search_request_id
+        self.hotel_search_thread = threading.Thread(
+            target=self._hotel_options_worker,
+            args=(keyword, silent, request_id, auto),
+            daemon=True,
+        )
+        self.hotel_search_thread.start()
+
+    def _hotel_options_worker(self, keyword, silent=False, request_id=0, auto=False):
+        driver = None
+        try:
+            selectors = self.config.get('selectors', {})
+            driver, _browser_config = self._connect_matching_debug_browser('ERP', selectors)
+            options = self._read_hotel_options_from_driver(driver, keyword)
+            self.root.after(0, lambda opts=options, kw=keyword, rid=request_id: self._apply_hotel_options(opts, None, kw, silent, rid, auto))
+        except Exception as exc:
+            self.root.after(0, lambda err=str(exc), kw=keyword, rid=request_id: self._apply_hotel_options(None, err, kw, silent, rid, auto))
+        finally:
+            if driver is not None:
+                try:
+                    driver.service.stop()
+                except Exception:
+                    pass
+
+    def _apply_hotel_options(self, options, error, keyword='', silent=False, request_id=0, auto=False):
+        if request_id and request_id != getattr(self, 'hotel_search_request_id', 0):
+            return
+        if error:
+            if auto:
+                self._show_hotel_result_message('검색 오류')
+                self.set_status(f"호텔검색 실패: {error}", self.accent_red)
+            elif not silent:
+                self.set_status('호텔 목록을 불러오지 못했습니다', self.accent_red)
+                messagebox.showerror('호텔검색 실패', error)
+            return
+        self._set_hotel_choices(options)
+        count = len(self.hotel_choices)
+        self._show_hotel_result_records(self.hotel_choices)
+        if auto:
+            if count:
+                self.set_status(f"'{keyword}' 호텔 후보 {count}개를 찾았습니다.", self.accent_green)
+            else:
+                self.set_status(f"'{keyword}' 검색 결과가 없습니다.", self.accent_orange)
+        elif not silent:
+            if count:
+                self.set_status(f"'{keyword}' 호텔 후보 {count}개를 불러왔습니다. 목록에서 호텔을 선택해 주세요.", self.accent_green)
+            else:
+                self.set_status(f"'{keyword}' 호텔 후보가 없습니다.", self.accent_orange)
+
+    def _read_hotel_options_from_driver(self, driver, keyword, limit=80):
+        try:
+            driver.set_script_timeout(20)
+        except Exception:
+            pass
+        result = driver.execute_async_script(
+            """
+            const keyword = arguments[0] || '';
+            const limit = Number(arguments[1] || 80);
+            const done = arguments[arguments.length - 1];
+            const params = new URLSearchParams();
+            params.set('searchType', 'pop');
+            params.set('infoCd', 'H');
+            params.set('infoTitle', keyword);
+            params.set('page', '1');
+            params.set('rows', String(limit));
+            params.set('pageIndex', '1');
+            params.set('recordCountPerPage', String(limit));
+            fetch('/erp/sy/sy02/sy02_108_list.json', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: params.toString()
+            }).then(async response => {
+                const text = await response.text();
+                if (!response.ok) {
+                    done({ok: false, error: response.status + ' ' + text.slice(0, 160)});
+                    return;
+                }
+                let data = {};
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    done({ok: false, error: 'JSON parse failed: ' + String(e)});
+                    return;
+                }
+                const root = data.responseData || data;
+                const list = root.list || root.rows || data.list || data.rows || [];
+                const rows = [];
+                const seen = new Set();
+                for (const item of list) {
+                    const seq = String(item.infoSeq || item.hotelSeq || item.seq || '').trim();
+                    const name = String(item.infoTitle || item.hotelKorNm || item.name || item.korNm || '').trim();
+                    const infoCd = String(item.infoCd || '').trim();
+                    if (!seq || !name) continue;
+                    if (infoCd && infoCd !== 'H') continue;
+                    if (seen.has(seq)) continue;
+                    seen.add(seq);
+                    rows.push(item);
+                    if (rows.length >= limit) break;
+                }
+                done({ok: true, rows});
+            }).catch(error => done({ok: false, error: String(error)}));
+            """,
+            keyword,
+            limit,
+        )
+        if not result or not result.get('ok'):
+            error = result.get('error') if isinstance(result, dict) else 'empty result'
+            raise RuntimeError(f'ERP 호텔 DB 검색 실패: {error}')
+        return result.get('rows') or []
 
     def _switch_driver_to_frame_containing(self, driver, selector, depth=0, max_depth=4):
         by, search_val = self._selector_locator(selector)
@@ -2850,6 +3201,7 @@ class RpaGuiApp:
             'airline_text': self.airline_var.get() if hasattr(self, 'airline_var') else AIRLINE_EMPTY_LABEL,
             'price_desc_text': self.price_desc_var.get() if hasattr(self, 'price_desc_var') else '',
             'hotel_name_text': self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else '',
+            'hotel_seq_text': getattr(self, 'current_hotel_seq', ''),
             'progress_text': self.progress_text_var.get() if hasattr(self, 'progress_text_var') else '',
             'active_cell': tuple(self._active_cell) if hasattr(self, '_active_cell') else (0, 0),
         }
@@ -2900,6 +3252,7 @@ class RpaGuiApp:
                 self.price_desc_var.set(snapshot.get('price_desc_text') or '')
             if hasattr(self, 'hotel_name_var'):
                 self.hotel_name_var.set(snapshot.get('hotel_name_text') or '')
+            self.current_hotel_seq = snapshot.get('hotel_seq_text') or ''
             if hasattr(self, 'progress_text_var'):
                 self.progress_text_var.set(snapshot.get('progress_text') or '')
             active = snapshot.get('active_cell') or (0, 0)
@@ -3399,11 +3752,13 @@ class RpaGuiApp:
             self.price_desc_var.set('')
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
+        self.current_hotel_seq = ''
         if hasattr(self, 'progress_text_var'):
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
+        self.selected_hotel_seq = ''
         self.selected_progress_text = ''
         self.fares_data = []
         self.editing_job_index = None
@@ -3439,9 +3794,11 @@ class RpaGuiApp:
         price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
         airline = str(job.get('airline_code') or '').strip() or '전체 항공사'
         hotel_name = str(job.get('hotel_name') or '').strip()
+        hotel_seq = str(job.get('hotel_seq') or '').strip()
         parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}']
         if hotel_name:
-            parts.append(f'호텔명 : {hotel_name}')
+            hotel_label = f'{hotel_name} (hotelSeq {hotel_seq})' if hotel_seq else hotel_name
+            parts.append(f'호텔명 : {hotel_label}')
         return ' / '.join(parts)
 
     def _normalize_job(self, job):
@@ -3449,11 +3806,13 @@ class RpaGuiApp:
         price_desc = str(job.get('price_desc') or '').strip()
         airline_code = self._normalize_job_airline_code(job.get('airline_code'))
         hotel_name = str(job.get('hotel_name') or '').strip()
+        hotel_seq = str(job.get('hotel_seq') or '').strip()
         progress_text = str(job.get('progress_text') or '').strip()
         for row in rows:
             row['price_desc'] = str(row.get('price_desc') or price_desc).strip()
             row['airline_code'] = self._normalize_job_airline_code(row.get('airline_code') or airline_code)
             row['hotel_name'] = str(row.get('hotel_name') or hotel_name).strip()
+            row['hotel_seq'] = str(row.get('hotel_seq') or hotel_seq).strip()
             row['progress_status'] = str(row.get('progress_status') or progress_text).strip()
         progress = dict(job.get('_progress') or {})
         progress.setdefault('status', '대기')
@@ -3466,6 +3825,7 @@ class RpaGuiApp:
             'price_desc': price_desc,
             'airline_code': airline_code,
             'hotel_name': hotel_name,
+            'hotel_seq': hotel_seq,
             'progress_text': progress_text,
             'rows': rows,
             'source': str(job.get('source') or '').strip(),
@@ -3672,11 +4032,13 @@ class RpaGuiApp:
             self.price_desc_var.set('')
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
+        self.current_hotel_seq = ''
         if hasattr(self, 'progress_text_var'):
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
         self.selected_hotel_name = ''
+        self.selected_hotel_seq = ''
         self.selected_progress_text = ''
         self.fares_data = []
         self.editing_job_index = None
@@ -3703,7 +4065,7 @@ class RpaGuiApp:
             return
         airline_code = self._selected_airline_code()
         price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
-        hotel_name = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
+        hotel_name, hotel_seq = self._selected_hotel_filter()
         progress_text = ''
         if not any([price_desc, airline_code, hotel_name]):
             messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분, 항공사코드, 호텔명 중 하나 이상 입력해 주세요.')
@@ -3714,23 +4076,30 @@ class RpaGuiApp:
             item['price_desc'] = price_desc
             item['airline_code'] = airline_code
             item['hotel_name'] = hotel_name
+            item['hotel_seq'] = hotel_seq
             item['progress_status'] = str(item.get('progress_status') or progress_text).strip()
             rows_for_job.append(item)
         new_job = self._normalize_job({
             'price_desc': price_desc,
             'airline_code': airline_code,
             'hotel_name': hotel_name,
+            'hotel_seq': hotel_seq,
             'progress_text': progress_text,
             'rows': rows_for_job,
             'source': '입력표',
         })
         replace_index = self.editing_job_index
         confirm_action = '수정 반영' if replace_index is not None and 0 <= replace_index < len(self.job_queue) else '추가'
+        hotel_confirm_text = hotel_name or '전체 호텔'
+        if hotel_seq:
+            hotel_confirm_text = f'{hotel_confirm_text} (hotelSeq {hotel_seq})'
+        elif hotel_name:
+            hotel_confirm_text = f'{hotel_confirm_text} (ERP DB 미선택)'
         confirm_msg = (
             f"아래 조건으로 작업 목록에 {confirm_action}할까요?\n\n"
             f"요금구분: {price_desc or '전체 요금구분'}\n"
             f"항공사: {airline_code or '전체 항공사'}\n"
-            f"호텔명: {hotel_name or '전체 호텔'}\n"
+            f"호텔명: {hotel_confirm_text}\n"
             f"대상 행: {len(rows_for_job)}건"
         )
         if not messagebox.askyesno('작업 목록 확인', confirm_msg):
@@ -3815,6 +4184,7 @@ class RpaGuiApp:
         self.price_desc_var.set(str(job.get('price_desc') or ''))
         self._select_airline_code(job.get('airline_code') or '', overwrite_blank_only=False)
         self.hotel_name_var.set(str(job.get('hotel_name') or ''))
+        self.current_hotel_seq = str(job.get('hotel_seq') or '').strip()
         self.progress_text_var.set(str(job.get('progress_text') or ''))
         self._set_source_badge(f"편집 중: {self._job_condition_text(job)}")
         if not self.panel_expanded:
@@ -4537,6 +4907,10 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
+            self.hotel_search_btn.config(state=state)
+        except Exception:
+            pass
+        try:
             if locked:
                 self.sheet.disable_bindings("edit_cell", "paste", "cut", "delete", "undo")
             else:
@@ -4583,6 +4957,7 @@ class RpaGuiApp:
             self.selected_airline_code = first_job.get('airline_code') or ''
             self.selected_price_desc = first_job.get('price_desc') or ''
             self.selected_hotel_name = first_job.get('hotel_name') or ''
+            self.selected_hotel_seq = first_job.get('hotel_seq') or ''
             self.selected_progress_text = first_job.get('progress_text') or ''
             self._reset_job_progress_for_run(jobs)
         else:
@@ -4604,16 +4979,18 @@ class RpaGuiApp:
             self.fares_data = filtered
             self.selected_airline_code = self._selected_airline_code()
             self.selected_price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
-            self.selected_hotel_name = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
+            self.selected_hotel_name, self.selected_hotel_seq = self._selected_hotel_filter()
             self.selected_progress_text = ''
             for row in self.fares_data:
                 row['price_desc'] = self.selected_price_desc
                 row['airline_code'] = self.selected_airline_code
                 row['hotel_name'] = self.selected_hotel_name
+                row['hotel_seq'] = self.selected_hotel_seq
             self.rpa_jobs_to_run = [{
                 'price_desc': self.selected_price_desc,
                 'airline_code': self.selected_airline_code,
                 'hotel_name': self.selected_hotel_name,
+                'hotel_seq': self.selected_hotel_seq,
                 'progress_text': self.selected_progress_text,
                 'rows': filtered,
                 'source': '입력표',
@@ -5837,8 +6214,9 @@ class RpaGuiApp:
             raise RuntimeError(f"{label} 필드 값이 기대값과 다릅니다. 기대={value!r}, 실제={actual!r}")
         return result
 
-    def _set_erp_hotel_filter(self, selectors, hotel_name, timeout=3.0, poll=0.15):
+    def _set_erp_hotel_filter(self, selectors, hotel_name, expected_seq='', timeout=3.0, poll=0.15):
         hotel_name = '' if hotel_name is None else str(hotel_name).strip()
+        expected_seq = '' if expected_seq is None else str(expected_seq).strip()
         name_selector = selectors.get('hotel_name_input', '#hotelKorNm')
         seq_selector = selectors.get('hotel_seq_input', '#hotelSeq')
         result = self.driver.execute_script(
@@ -5911,6 +6289,11 @@ class RpaGuiApp:
             raise RuntimeError(
                 f"호텔명 '{hotel_name}'이 ERP 호텔키({seq_selector})로 매칭되지 않았습니다. "
                 "호텔명을 ERP 자동완성에서 단일 매칭되는 이름으로 입력해 주세요."
+            )
+        if expected_seq and seq_value != expected_seq:
+            raise RuntimeError(
+                f"호텔명 '{hotel_name}'의 ERP 매칭값이 선택한 hotelSeq와 다릅니다. "
+                f"선택={expected_seq}, ERP자동완성={seq_value}"
             )
         return {'ok': True, 'value': actual_name or hotel_name, 'seq': seq_value}
 
@@ -6558,6 +6941,7 @@ class RpaGuiApp:
                 airline_code = str(row.get("airline_code") or self.selected_airline_code or "").strip().upper()
                 price_desc = str(row.get("price_desc") or self.selected_price_desc or "").strip()
                 hotel_name = str(row.get("hotel_name") or self.selected_hotel_name or "").strip()
+                hotel_seq = str(row.get("hotel_seq") or self.selected_hotel_seq or "").strip()
                 progress_text = str(row.get("progress_status") or self.selected_progress_text or "").strip()
                 progress_code, progress_label = self._progress_status_from_text(progress_text)
 
@@ -6612,6 +6996,7 @@ class RpaGuiApp:
                     hotel_result = self._set_erp_hotel_filter(
                         selectors,
                         hotel_name,
+                        expected_seq=hotel_seq,
                         timeout=min(driver_timeout, 4),
                         poll=erp_poll_interval,
                     )

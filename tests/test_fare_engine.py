@@ -256,6 +256,90 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("요금구분 : 3박_다낭 / 항공사 : LJ / 호텔명 : 멜리아 빈펄 다낭", job["rows"][0]["_job_label"])
         self.assertNotIn("진행구분", job["rows"][0]["_job_label"])
 
+    def test_hotel_db_selection_keeps_hotel_seq_in_job(self):
+        class Var:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.hotel_name_var = Var("두짓")
+        app.current_hotel_seq = ""
+        app.hotel_choices = []
+        app.hotel_record_by_label = {}
+        app.hotel_record_by_seq = {}
+
+        app._set_hotel_choices([{
+            "infoSeq": 7864,
+            "infoCd": "H",
+            "infoTitle": "아미아나 리조트 나트랑",
+            "natNm": "베트남",
+            "cityNm": "나트랑",
+            "useYn": "Y",
+        }])
+        app._select_hotel_record(app.hotel_choices[0])
+
+        hotel_name, hotel_seq = app._selected_hotel_filter()
+        job = app._normalize_job({
+            "price_desc": "3박_나트랑",
+            "airline_code": "7C",
+            "hotel_name": hotel_name,
+            "hotel_seq": hotel_seq,
+            "rows": [{"date": "2026-07-15", "date_end": "2026-07-15"}],
+            "source": "입력표",
+        })
+
+        self.assertEqual(hotel_name, "아미아나 리조트 나트랑")
+        self.assertEqual(hotel_seq, "7864")
+        self.assertEqual(job["hotel_seq"], "7864")
+        self.assertEqual(job["rows"][0]["hotel_seq"], "7864")
+        self.assertIn("호텔명 : 아미아나 리조트 나트랑 (hotelSeq 7864)", job["rows"][0]["_job_label"])
+
+    def test_hotel_no_match_result_message_is_shown(self):
+        class ListBox:
+            def __init__(self):
+                self.items = []
+                self.item_options = {}
+
+            def delete(self, *_args):
+                self.items = []
+
+            def insert(self, _index, value):
+                self.items.append(value)
+
+            def itemconfig(self, index, **kwargs):
+                self.item_options[index] = kwargs
+
+        class Frame:
+            def __init__(self):
+                self.mapped = False
+
+            def winfo_ismapped(self):
+                return self.mapped
+
+            def pack(self, **_kwargs):
+                self.mapped = True
+
+            def pack_forget(self):
+                self.mapped = False
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.hotel_result_list = ListBox()
+        app.hotel_result_frame = Frame()
+        app.hotel_result_records = []
+        app.fg_muted = "#94a3b8"
+
+        app._show_hotel_result_records([])
+
+        self.assertEqual(app.hotel_result_list.items, ["검색 결과 없음"])
+        self.assertTrue(app.hotel_result_frame.mapped)
+        self.assertEqual(app.hotel_result_records, [])
+
     def test_job_progress_status_counts_results(self):
         class Root:
             def after(self, _delay, func):
