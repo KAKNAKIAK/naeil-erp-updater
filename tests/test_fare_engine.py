@@ -370,6 +370,38 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(result["seq"], "9001")
         self.assertEqual(result["selected_seq"], "7864")
 
+    def test_hotel_filter_clears_stale_seq_before_waiting_for_new_seq(self):
+        class Driver:
+            def __init__(self):
+                self.setup_script = ""
+
+            def execute_script(self, script, *args):
+                if "const nameSelector = arguments[0]" in script:
+                    self.setup_script = script
+                    return {"ok": True, "value": "괌 니코 호텔", "seq": "", "previousSeq": "2264", "cleared": False}
+                if "const seq = document.querySelector" in script:
+                    return "4610"
+                if "const el = document.querySelector" in script:
+                    return "괌 니코 호텔"
+                raise AssertionError(f"Unexpected script: {script[:80]}")
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        driver = Driver()
+        app.driver = driver
+
+        with mock.patch("gui.time.sleep", return_value=None):
+            result = app._set_erp_hotel_filter(
+                {"hotel_name_input": "#hotelKorNm", "hotel_seq_input": "#hotelSeq"},
+                "괌 니코 호텔",
+                expected_seq="4610",
+                timeout=0.2,
+                poll=0.01,
+            )
+
+        self.assertIn("seq.value = ''", driver.setup_script)
+        self.assertEqual(result["value"], "괌 니코 호텔")
+        self.assertEqual(result["seq"], "4610")
+
     def test_hotel_name_match_ignores_spacing(self):
         self.assertTrue(RpaGuiApp._hotel_name_matches("괌PIC리조트", "괌 PIC 리조트"))
         self.assertFalse(RpaGuiApp._hotel_name_matches("괌 니코 호텔", "괌 PIC 리조트"))

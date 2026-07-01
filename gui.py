@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.11"
+APP_VERSION = "v5.0.12"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -6497,6 +6497,12 @@ class RpaGuiApp:
             if (!el) {
                 return {ok: false, reason: 'name_not_found'};
             }
+            const previousSeq = seq ? (seq.value || '') : '';
+            if (seq) {
+                seq.value = '';
+                seq.dispatchEvent(new Event('input', {bubbles: true}));
+                seq.dispatchEvent(new Event('change', {bubbles: true}));
+            }
             el.value = value;
             el.dispatchEvent(new Event('input', {bubbles: true}));
             el.dispatchEvent(new Event('change', {bubbles: true}));
@@ -6506,7 +6512,7 @@ class RpaGuiApp:
                     seq.dispatchEvent(new Event('change', {bubbles: true}));
                 }
                 el.dispatchEvent(new Event('blur', {bubbles: true}));
-                return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', cleared: true};
+                return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', previousSeq, cleared: true};
             }
             try {
                 if (typeof autoHotel === 'function') {
@@ -6516,7 +6522,7 @@ class RpaGuiApp:
                 return {ok: false, reason: 'autoHotel_error', error: String(e)};
             }
             el.dispatchEvent(new Event('blur', {bubbles: true}));
-            return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', cleared: false};
+            return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', previousSeq, cleared: false};
             """,
             name_selector,
             seq_selector,
