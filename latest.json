@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.10",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.10/NaeilERPUpdater_Setup_v5.0.10.exe",
-    "sha256":  "F2864A7C51BCD5D49DEC6CE5B0FAF8948997B2EB23789003944C41AA661EE2F2",
+    "version":  "v5.0.11",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.11/NaeilERPUpdater_Setup_v5.0.11.exe",
+    "sha256":  "78910E12750BE6392A4096689D6CCEA03504A665BBF529442AE342EB1307878A",
     "notes":  [
-                  "호텔명을 텍스트로 입력한 작업은 ERP 자동매칭 hotelSeq를 신뢰해 진행합니다.",
-                  "호텔 DB 후보를 사용자가 직접 선택한 작업만 hotelSeq 불일치 시 저장 전에 중단합니다.",
-                  "작업목록과 보고서에는 일반 텍스트 호텔과 DB 선택 호텔을 구분해 표시합니다."
+                  "호텔 DB 후보를 직접 선택해도 hotelSeq 불일치만으로 중단하지 않습니다.",
+                  "호텔 필터 검증 기준을 hidden hotelSeq에서 ERP 그리드 호텔명 텍스트로 변경했습니다.",
+                  "hotelSeq는 참고/로그용으로 보관하고, 다른 호텔명 행이 섞일 때만 저장 전에 중단합니다."
               ]
 }

@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.10"
+APP_VERSION = "v5.0.11"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -1677,6 +1677,7 @@ class RpaGuiApp:
             if hasattr(self, 'hotel_name_var'):
                 self.hotel_name_var.set('')
             self.current_hotel_seq = ''
+            self.current_hotel_seq_strict = False
             return
 
         if hotel_seq:
@@ -3854,6 +3855,17 @@ class RpaGuiApp:
             return value
         text = '' if value is None else str(value).strip().lower()
         return text in {'1', 'true', 'y', 'yes', 'on', 'strict'}
+
+    @staticmethod
+    def _normalize_hotel_name_for_match(value):
+        return ''.join(str(value or '').split()).casefold()
+
+    @classmethod
+    def _hotel_name_matches(cls, actual, expected):
+        expected_norm = cls._normalize_hotel_name_for_match(expected)
+        if not expected_norm:
+            return True
+        return cls._normalize_hotel_name_for_match(actual) == expected_norm
 
     def _job_condition_text(self, job):
         price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
@@ -6546,12 +6558,7 @@ class RpaGuiApp:
                 f"호텔명 '{hotel_name}'이 ERP 호텔키({seq_selector})로 매칭되지 않았습니다. "
                 "호텔명을 ERP 자동완성에서 단일 매칭되는 이름으로 입력해 주세요."
             )
-        if expected_seq and seq_value != expected_seq:
-            raise RuntimeError(
-                f"호텔명 '{hotel_name}'의 ERP 매칭값이 선택한 hotelSeq와 다릅니다. "
-                f"선택={expected_seq}, ERP자동완성={seq_value}"
-            )
-        return {'ok': True, 'value': actual_name or hotel_name, 'seq': seq_value}
+        return {'ok': True, 'value': actual_name or hotel_name, 'seq': seq_value, 'selected_seq': expected_seq}
 
     def _set_erp_date_input(self, selector, value, label, attempts=4, pause=0.2):
         value = '' if value is None else str(value).strip()
@@ -7200,7 +7207,6 @@ class RpaGuiApp:
                 hotel_name = row_conditions['hotel_name']
                 hotel_seq = row_conditions['hotel_seq']
                 hotel_seq_strict = bool(row_conditions['hotel_seq_strict'])
-                expected_hotel_seq = hotel_seq if hotel_seq_strict else ''
                 progress_text = row_conditions['progress_text']
                 progress_code, progress_label = self._progress_status_from_text(progress_text)
 
@@ -7255,13 +7261,13 @@ class RpaGuiApp:
                     hotel_result = self._set_erp_hotel_filter(
                         selectors,
                         hotel_name,
-                        expected_seq=expected_hotel_seq,
+                        expected_seq=hotel_seq if hotel_seq_strict else '',
                         timeout=min(driver_timeout, 4),
                         poll=erp_poll_interval,
                     )
                     if hotel_name:
-                        strict_note = ' / DB선택 검증' if expected_hotel_seq else ' / 호텔명 자동매칭'
-                        print(f" -> 호텔명 필터 설정: {hotel_result.get('value') or hotel_name} (hotelSeq={hotel_result.get('seq')}{strict_note})")
+                        match_note = ' / DB선택 텍스트 검증' if hotel_seq_strict else ' / 호텔명 텍스트 검증'
+                        print(f" -> 호텔명 필터 설정: {hotel_result.get('value') or hotel_name} (ERP hotelSeq={hotel_result.get('seq')}{match_note})")
                     elif index == 0:
                         print(" -> 호텔명 필터 초기화: 전체 호텔 대상")
 
@@ -7318,26 +7324,29 @@ class RpaGuiApp:
                         continue
 
                     if hotel_name:
-                        expected_hotel_seq = str(hotel_result.get('seq') or '').strip()
+                        expected_hotel_name = str(hotel_result.get('value') or hotel_name).strip()
                         hotel_summary = self.driver.execute_script(
                             """
                             try {
                                 const rows = (typeof AUIGrid !== 'undefined') ? (AUIGrid.getGridData(arguments[0]) || []) : [];
-                                const expected = String(arguments[1] || '').trim();
+                                const expectedName = String(arguments[1] || '').trim();
+                                const normalize = (value) => String(value || '').replace(/\\s+/g, '').toLowerCase();
+                                const expectedNorm = normalize(expectedName);
                                 let mismatches = [];
                                 for (let i = 0; i < rows.length; i++) {
+                                    const name = String(rows[i].hotelKorNm || rows[i].hotelNm || rows[i].hotelName || '').trim();
                                     const seq = String(rows[i].hotelSeq == null ? '' : rows[i].hotelSeq).trim();
-                                    if (expected && seq !== expected) {
-                                        mismatches.push({row: i + 1, hotelSeq: seq, hotelKorNm: rows[i].hotelKorNm || ''});
+                                    if (expectedNorm && normalize(name) !== expectedNorm) {
+                                        mismatches.push({row: i + 1, hotelSeq: seq, hotelKorNm: name});
                                     }
                                 }
-                                return {total: rows.length, expected, mismatchCount: mismatches.length, mismatches: mismatches.slice(0, 3)};
+                                return {total: rows.length, expectedName, mismatchCount: mismatches.length, mismatches: mismatches.slice(0, 3)};
                             } catch(e) {
-                                return {total: 0, expected: String(arguments[1] || '').trim(), mismatchCount: -1, error: String(e)};
+                                return {total: 0, expectedName: String(arguments[1] || '').trim(), mismatchCount: -1, error: String(e)};
                             }
                             """,
                             grid_id,
-                            expected_hotel_seq,
+                            expected_hotel_name,
                         )
                         hotel_summary = hotel_summary or {'mismatchCount': -1, 'error': 'empty verification result'}
                         mismatch_count = int(hotel_summary.get('mismatchCount') or 0)
@@ -7346,10 +7355,13 @@ class RpaGuiApp:
                         if mismatch_count > 0:
                             sample = hotel_summary.get('mismatches') or []
                             raise RuntimeError(
-                                f"호텔명 필터 검증 실패: 기대 hotelSeq={expected_hotel_seq}, "
+                                f"호텔명 필터 검증 실패: 기대 호텔명={expected_hotel_name}, "
                                 f"다른 호텔 행 {mismatch_count}건 감지 {sample}"
                             )
-                        print(f" -> 호텔명 필터 검증: {hotel_summary.get('total', 0)}건 hotelSeq={expected_hotel_seq}")
+                        print(
+                            f" -> 호텔명 필터 검증: {hotel_summary.get('total', 0)}건 "
+                            f"호텔명={expected_hotel_name} (ERP hotelSeq={hotel_result.get('seq')})"
+                        )
 
                     # === 페이징 처리: 조회 결과 500건 초과 시 모든 페이지를 순회하며 저장 ===
                     # totalPage 변수는 행 바인딩보다 늦게 채워지므로(실측 지연), 행에 즉시 담기는

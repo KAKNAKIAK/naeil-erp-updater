@@ -350,6 +350,30 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("호텔명 : 괌 PIC 리조트", job["rows"][0]["_job_label"])
         self.assertNotIn("hotelSeq 1796", job["rows"][0]["_job_label"])
 
+    def test_selected_hotel_allows_different_erp_seq_when_name_matches(self):
+        class Driver:
+            def execute_script(self, script, *args):
+                if "const nameSelector = arguments[0]" in script:
+                    return {"ok": True, "value": "아미아나 리조트 나트랑", "seq": "9001", "cleared": False}
+                raise AssertionError(f"Unexpected script: {script[:80]}")
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.driver = Driver()
+
+        result = app._set_erp_hotel_filter(
+            {"hotel_name_input": "#hotelKorNm", "hotel_seq_input": "#hotelSeq"},
+            "아미아나 리조트 나트랑",
+            expected_seq="7864",
+        )
+
+        self.assertEqual(result["value"], "아미아나 리조트 나트랑")
+        self.assertEqual(result["seq"], "9001")
+        self.assertEqual(result["selected_seq"], "7864")
+
+    def test_hotel_name_match_ignores_spacing(self):
+        self.assertTrue(RpaGuiApp._hotel_name_matches("괌PIC리조트", "괌 PIC 리조트"))
+        self.assertFalse(RpaGuiApp._hotel_name_matches("괌 니코 호텔", "괌 PIC 리조트"))
+
     def test_hotel_no_match_result_message_is_shown(self):
         class ListBox:
             def __init__(self):
