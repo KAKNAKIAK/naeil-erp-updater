@@ -138,8 +138,66 @@ class FareEngineTest(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(rows[0]["progress_status"], "예약마감")
+        self.assertEqual(rows[0]["progress_status_field"], "adult_air")
         self.assertEqual(rows[0]["adult_air"], "")
         self.assertEqual(app._progress_status_from_text(rows[0]["progress_status"]), ("05", "예약마감"))
+
+    def test_load_job_to_sheet_restores_reservation_closed_cell_text(self):
+        class Var:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class Sheet:
+            def __init__(self):
+                self.data = []
+
+            def headers(self, _headers):
+                pass
+
+            def set_column_widths(self, _widths):
+                pass
+
+            def set_sheet_data(self, data, **_kwargs):
+                self.data = data
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.period_mode_var = Var(False)
+        app.price_desc_var = Var()
+        app.hotel_name_var = Var()
+        app.progress_text_var = Var()
+        app.sheet = Sheet()
+        app.formulas = {}
+        app._results = {}
+        app.panel_expanded = True
+        app._record_sheet_undo_state = lambda *_args, **_kwargs: None
+        app._clear_merge_restore_snapshot = lambda: None
+        app._select_airline_code = lambda *_args, **_kwargs: None
+        app._set_source_badge = lambda *_args, **_kwargs: None
+        app.refresh_count = lambda: None
+        app._load_active_into_fb = lambda: None
+        app._sync_sheet_undo_baseline = lambda: None
+
+        app._load_job_to_sheet({
+            "price_desc": "괌_저녁_3박",
+            "airline_code": "LJ",
+            "hotel_name": "두짓비치 괌",
+            "rows": [{
+                "date": "2026-07-15",
+                "date_end": "2026-07-15",
+                "adult_air": "",
+                "progress_status": "예약마감",
+                "progress_status_field": "adult_air",
+            }],
+        })
+
+        self.assertEqual(app.sheet.data[0][1], "예약마감")
+        self.assertEqual(app.hotel_name_var.get(), "두짓비치 괌")
 
     def test_current_page_progress_counts_detects_reservation_closed(self):
         class Driver:
@@ -177,6 +235,51 @@ class FareEngineTest(unittest.TestCase):
                 {"total": 0, "reservation_closed": 0}
             )
         )
+
+    def test_job_normalizes_korean_airline_label_to_code(self):
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app._set_airline_choices([("LJ", "진에어"), ("7C", "제주항공")])
+
+        job = app._normalize_job({
+            "price_desc": "3박_다낭",
+            "airline_code": "진에어",
+            "hotel_name": "멜리아 빈펄 다낭",
+            "progress_text": "예약마감",
+            "rows": [{"date": "2026-07-15", "date_end": "2026-07-15"}],
+            "source": "jobs.xlsx",
+        })
+
+        self.assertEqual(job["airline_code"], "LJ")
+        self.assertEqual(job["hotel_name"], "멜리아 빈펄 다낭")
+        self.assertEqual(job["rows"][0]["airline_code"], "LJ")
+        self.assertIn("요금구분 : 3박_다낭 / 항공사 : LJ / 호텔명 : 멜리아 빈펄 다낭", job["rows"][0]["_job_label"])
+        self.assertNotIn("진행구분", job["rows"][0]["_job_label"])
+
+    def test_job_progress_status_counts_results(self):
+        class Root:
+            def after(self, _delay, func):
+                func()
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.root = Root()
+        app.job_queue = [{
+            "price_desc": "3박_다낭",
+            "airline_code": "LJ",
+            "hotel_name": "",
+            "rows": [{"date": "2026-07-15"}, {"date": "2026-07-16"}],
+            "source": "입력표",
+        }]
+        app._refresh_job_queue_view = lambda: None
+        app.job_queue = [app._normalize_job(app.job_queue[0])]
+        app._assign_job_queue_metadata()
+
+        app._set_job_progress_ui(0, status="진행 중")
+        app._set_job_progress_ui(0, result_status="SUCCESS")
+        app._set_job_progress_ui(0, result_status="SKIP")
+
+        self.assertIn("완료", app._job_status_text(app.job_queue[0]))
+        self.assertIn("성공 1", app._job_status_text(app.job_queue[0]))
+        self.assertIn("건너뜀 1", app._job_status_text(app.job_queue[0]))
 
     def test_calculation_debug_groups_round_trips_by_night(self):
         result = calculate_round_trips(

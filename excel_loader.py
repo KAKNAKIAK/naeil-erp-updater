@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+import re
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -59,6 +60,223 @@ def _is_date_like(val):
         return 2000 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31
     except (ValueError, TypeError):
         return False
+
+
+def _normalize_header_name(value):
+    text = "" if value is None else str(value).strip().lower()
+    return re.sub(r"[\s_\-./()]+", "", text)
+
+
+def _find_column(headers, aliases):
+    normalized_aliases = {_normalize_header_name(alias) for alias in aliases}
+    for idx, header in enumerate(headers):
+        if _normalize_header_name(header) in normalized_aliases:
+            return idx
+    return None
+
+
+def _cell_text(row, col_idx):
+    if col_idx is None:
+        return ""
+    try:
+        value = row.iloc[col_idx]
+    except Exception:
+        return ""
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _has_reservation_closed_text(value):
+    return "예약마감" in re.sub(r"\s+", "", str(value or ""))
+
+
+def _parse_fare_value(val, label, row_no, errors):
+    if pd.isna(val):
+        return 0
+    text = str(val).strip()
+    if not text:
+        return 0
+    if _has_reservation_closed_text(text):
+        return ""
+    try:
+        parsed = int(float(text.replace(",", "")))
+        if parsed < 0:
+            errors.append(f"{row_no}행: {label} 요금이 음수({parsed})라 0원으로 대체했습니다.")
+            return 0
+        return parsed
+    except (ValueError, TypeError):
+        errors.append(f"{row_no}행: {label} 요금 오류값({text})을 0원으로 대체했습니다.")
+        return 0
+
+
+def load_fare_jobs_from_excel(file_path, history_log_path=None):
+    """조건열이 있는 엑셀을 작업 큐용 그룹으로 읽는다.
+
+    조건열 감지 기준: 요금구분 + 항공사코드 열이 모두 있어야 한다.
+    반환값: {
+        detected: bool,
+        jobs: [{price_desc, airline_code, hotel_name, rows, source}],
+        is_period: bool,
+        errors: [str]
+    }
+    """
+    result = {"detected": False, "jobs": [], "is_period": False, "errors": []}
+    if not file_path or not os.path.exists(file_path):
+        return result
+
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as exc:
+        result["errors"].append(f"엑셀 읽기 실패: {exc}")
+        return result
+
+    if df.empty:
+        result["errors"].append("엑셀 파일에 데이터가 없습니다.")
+        return result
+
+    headers = [str(c).strip() for c in df.columns]
+    price_col = _find_column(headers, ["요금구분", "가격구분", "price_desc", "pricedesc", "price description"])
+    airline_col = _find_column(headers, ["항공사코드", "항공사", "airline", "airline_code", "airlinecode", "air2cd"])
+    hotel_col = _find_column(headers, ["호텔명", "호텔", "hotel_name", "hotelname", "hotel_kor_nm", "hotelkornm", "hotelKorNm"])
+    progress_col = _find_column(headers, ["진행구분", "진행상태", "progress", "progress_status", "proccd"])
+    if price_col is None or airline_col is None:
+        return result
+
+    result["detected"] = True
+    condition_cols = {idx for idx in (price_col, airline_col, hotel_col, progress_col) if idx is not None}
+
+    start_col = _find_column(headers, ["시작일", "날짜", "출발일", "출발일자", "start", "start_date", "startdate", "date"])
+    end_col = _find_column(headers, ["종료일", "종료날짜", "종료", "end", "end_date", "enddate"])
+    data_cols = [idx for idx in range(len(headers)) if idx not in condition_cols]
+    if start_col is None and data_cols:
+        start_col = data_cols[0]
+
+    if end_col is None and start_col is not None:
+        candidates = [idx for idx in data_cols if idx != start_col]
+        if candidates:
+            total = date_like = 0
+            for value in df.iloc[:, candidates[0]]:
+                marker = _is_date_like(value)
+                if marker is None:
+                    continue
+                total += 1
+                if marker:
+                    date_like += 1
+            if total > 0 and date_like >= total * 0.6:
+                end_col = candidates[0]
+
+    is_period_excel = end_col is not None
+    result["is_period"] = is_period_excel
+
+    def fare_col(aliases, fallback_offset):
+        found = _find_column(headers, aliases)
+        if found is not None:
+            return found
+        if start_col is None:
+            return None
+        ordered = [idx for idx in data_cols if idx not in {start_col, end_col}]
+        return ordered[fallback_offset] if fallback_offset < len(ordered) else None
+
+    adult_air_col = fare_col(["항공비", "성인항공비", "adult_air", "adultair", "air"], 0)
+    adult_hotel_col = fare_col(["호텔비", "성인호텔비", "adult_hotel", "hotel"], 1)
+    adult_land_col = fare_col(["지상비", "성인지상비", "adult_land", "land"], 2)
+    adult_tour_col = fare_col(["여행경비", "경비", "adult_tour", "tour", "expense"], 3)
+    adult_profit_col = fare_col(["알선수익", "수익", "adult_profit", "profit"], 4)
+    child_col = fare_col(["소아", "소아요금", "child", "child_fare", "childfare"], 5)
+    infant_col = fare_col(["유아", "유아요금", "infant", "infant_fare", "infantfare"], 6)
+    fare_cols = [
+        ("adult_air", adult_air_col, "성인 항공비"),
+        ("adult_hotel", adult_hotel_col, "성인 호텔비"),
+        ("adult_land", adult_land_col, "성인 지상비"),
+        ("adult_tour", adult_tour_col, "성인 여행경비"),
+        ("adult_profit", adult_profit_col, "성인 알선수익"),
+        ("child_fare", child_col, "소아 요금"),
+        ("infant_fare", infant_col, "유아 요금"),
+    ]
+
+    completed_dates = set()
+    if history_log_path and os.path.exists(history_log_path):
+        try:
+            history_df = pd.read_csv(history_log_path, encoding="utf-8")
+            if not history_df.empty and "status" in history_df.columns and "date" in history_df.columns:
+                success_rows = history_df[history_df["status"].str.strip() == "SUCCESS"]
+                completed_dates = set(success_rows["date"].astype(str).str.strip())
+        except Exception as exc:
+            result["errors"].append(f"이력 로그 읽기 실패: {exc}")
+
+    jobs_by_key = {}
+    job_order = []
+    source_name = os.path.basename(file_path)
+    for idx, row in df.iterrows():
+        row_no = idx + 2
+        price_desc = _cell_text(row, price_col)
+        airline_code = _cell_text(row, airline_col).upper()
+        hotel_name = _cell_text(row, hotel_col)
+        progress_text = _cell_text(row, progress_col)
+        if not price_desc or not airline_code:
+            result["errors"].append(f"{row_no}행: 요금구분과 항공사코드는 필수입니다.")
+            continue
+
+        date_str = _normalize_dt(row.iloc[start_col]) if start_col is not None else None
+        if not date_str:
+            result["errors"].append(f"{row_no}행: 시작 날짜 형식 오류")
+            continue
+        end_raw = row.iloc[end_col] if end_col is not None else row.iloc[start_col]
+        date_end_str = _normalize_dt(end_raw) or date_str
+        if date_str > date_end_str:
+            result["errors"].append(f"{row_no}행: 시작 날짜({date_str})가 종료 날짜({date_end_str})보다 늦습니다.")
+            continue
+        if date_str in completed_dates:
+            continue
+
+        raw_fare_values = [
+            (field, row.iloc[col] if col is not None else "")
+            for field, col, _label in fare_cols
+        ]
+        progress_status_field = next(
+            (field for field, value in raw_fare_values if _has_reservation_closed_text(value)),
+            "",
+        )
+        if not progress_text:
+            progress_text = next((str(v).strip() for _field, v in raw_fare_values if _has_reservation_closed_text(v)), "")
+
+        parsed_values = [
+            _parse_fare_value(row.iloc[col] if col is not None else "", label, row_no, result["errors"])
+            for _field, col, label in fare_cols
+        ]
+        row_data = {
+            "row_index": row_no,
+            "date": date_str,
+            "date_end": date_end_str,
+            "adult_air": parsed_values[0],
+            "adult_hotel": parsed_values[1],
+            "adult_land": parsed_values[2],
+            "adult_tour": parsed_values[3],
+            "adult_profit": parsed_values[4],
+            "child_fare": parsed_values[5],
+            "infant_fare": parsed_values[6],
+            "price_desc": price_desc,
+            "airline_code": airline_code,
+            "hotel_name": hotel_name,
+            "progress_status": progress_text,
+            "progress_status_field": progress_status_field,
+        }
+        key = (price_desc, airline_code, hotel_name)
+        if key not in jobs_by_key:
+            jobs_by_key[key] = {
+                "price_desc": price_desc,
+                "airline_code": airline_code,
+                "hotel_name": hotel_name,
+                "progress_text": "",
+                "rows": [],
+                "source": source_name,
+            }
+            job_order.append(key)
+        jobs_by_key[key]["rows"].append(row_data)
+
+    result["jobs"] = [jobs_by_key[key] for key in job_order if jobs_by_key[key]["rows"]]
+    return result
 
 def load_and_validate_fares(file_path, history_log_path=None):
     """
@@ -397,4 +615,3 @@ if __name__ == "__main__":
                 print(item)
     else:
         print("선택 취소됨.")
-

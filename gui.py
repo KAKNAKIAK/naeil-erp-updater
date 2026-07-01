@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.4"
+APP_VERSION = "v5.0.5"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -279,6 +279,10 @@ class RpaGuiApp:
 
         self.config = self.load_config()
         self.fares_data = []
+        self.job_queue = []
+        self.rpa_jobs_to_run = []
+        self.current_rpa_job = None
+        self.editing_job_index = None
         self.rpa_thread = None
         self.is_running = False
         self.is_paused = False
@@ -304,6 +308,7 @@ class RpaGuiApp:
         self.custom_night_var = tk.StringVar(value='')
         self.airline_var = tk.StringVar(value=AIRLINE_EMPTY_LABEL)
         self.price_desc_var = tk.StringVar(value='')
+        self.hotel_name_var = tk.StringVar(value='')
         self.progress_text_var = tk.StringVar(value='')
         self.airline_choices = []
         self.airline_value_by_label = {}
@@ -311,6 +316,7 @@ class RpaGuiApp:
         self.airline_refresh_thread = None
         self.selected_airline_code = ''
         self.selected_price_desc = ''
+        self.selected_hotel_name = ''
         self.selected_progress_text = ''
         self.night_vars = {}
         self.night_chip_buttons = {}
@@ -375,6 +381,8 @@ class RpaGuiApp:
             'search_date_end_input': '#searchEnDate',
             'airline_select': '#air2Cd',
             'price_desc_input': '#priceDesc',
+            'hotel_name_input': '#hotelKorNm',
+            'hotel_seq_input': '#hotelSeq',
             'event_modify_button': '#eventModify',
             'bulk_update_save_button': '#appSave',
             'progress_status_checkbox': '#procCdChk',
@@ -927,6 +935,7 @@ class RpaGuiApp:
         self._make_toolbar_btn(toolbar, '다시실행', self.btn_neutral_bg, self.btn_neutral_hover, self.redo_sheet, fg=self.btn_neutral_fg)
         self._make_toolbar_btn(toolbar, '요금구간 병합', self.accent_orange, self.accent_orange_hover, self.merge_sheet_fare_ranges)
         self._make_toolbar_btn(toolbar, '엑셀로 다운받기', self.accent_color, self.accent_hover, self.export_sheet_to_excel)
+        self._make_toolbar_btn(toolbar, '작업 목록에 추가', self.btn_neutral_bg, self.btn_neutral_hover, self.add_current_sheet_to_job_queue, fg=self.btn_neutral_fg)
 
         self.period_mode_var = tk.BooleanVar(value=False)
         self.period_mode_cb = tk.Checkbutton(
@@ -957,6 +966,8 @@ class RpaGuiApp:
             font=('맑은 고딕', 9),
         )
         self.airline_combo.pack(side=tk.LEFT)
+        self.airline_combo.bind('<FocusIn>', self._select_airline_combo_text)
+        self.airline_combo.bind('<ButtonRelease-1>', self._select_airline_combo_text)
         self.airline_combo.bind('<<ComboboxSelected>>', self._on_airline_combo_change)
         self.airline_combo.bind('<FocusOut>', self._on_airline_combo_change)
         tk.Label(
@@ -983,15 +994,15 @@ class RpaGuiApp:
         self.price_desc_entry.pack(side=tk.LEFT, ipady=3)
         tk.Label(
             search_filter_bar,
-            text='진행구분',
+            text='호텔명',
             font=('맑은 고딕', 9, 'bold'),
             bg=self.card_color,
             fg=self.fg_color,
         ).pack(side=tk.LEFT, padx=(16, 6))
-        self.progress_text_entry = tk.Entry(
+        self.hotel_name_entry = tk.Entry(
             search_filter_bar,
-            textvariable=self.progress_text_var,
-            width=14,
+            textvariable=self.hotel_name_var,
+            width=20,
             bg=self.input_bg,
             fg=self.fg_color,
             insertbackground='white',
@@ -1002,7 +1013,7 @@ class RpaGuiApp:
             highlightthickness=1,
             font=('맑은 고딕', 9),
         )
-        self.progress_text_entry.pack(side=tk.LEFT, ipady=3)
+        self.hotel_name_entry.pack(side=tk.LEFT, ipady=3)
 
         # 수식 입력줄(formula bar): '=' 식 편집 중 표의 칸을 클릭하면 참조가 삽입된다
         fb_frame = tk.Frame(sheet_card, bg=self.card_color)
@@ -1115,6 +1126,54 @@ class RpaGuiApp:
             pady=4,
         )
         self.data_source_badge.pack(side=tk.LEFT, padx=(4, 0))
+
+        # 2-2. 다중 상품 작업 목록
+        job_card = tk.Frame(self.fare_tab, bg=self.card_color, highlightbackground=self.border_color, highlightthickness=1)
+        job_card.pack(fill=tk.X, padx=6, pady=(0, 8))
+
+        job_header = tk.Frame(job_card, bg=self.card_color)
+        job_header.pack(fill=tk.X)
+        tk.Label(
+            job_header,
+            text='작업 목록',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_muted,
+        ).pack(side=tk.LEFT, padx=10, pady=(7, 4))
+        self.job_queue_summary_lbl = tk.Label(
+            job_header,
+            text='등록된 작업 없음',
+            font=('맑은 고딕', 8),
+            bg=self.card_color,
+            fg=self.fg_muted,
+        )
+        self.job_queue_summary_lbl.pack(side=tk.LEFT, padx=(6, 0), pady=(7, 4))
+
+        job_body = tk.Frame(job_card, bg=self.border_color)
+        job_body.pack(fill=tk.X, padx=10)
+        self.job_tree = ttk.Treeview(
+            job_body,
+            columns=('condition', 'status', 'rows', 'source'),
+            show='headings',
+            height=3,
+        )
+        self.job_tree.heading('condition', text='조건')
+        self.job_tree.heading('status', text='진행상황')
+        self.job_tree.heading('rows', text='건수')
+        self.job_tree.heading('source', text='출처')
+        self.job_tree.column('condition', width=390, anchor=tk.W)
+        self.job_tree.column('status', width=180, anchor=tk.W)
+        self.job_tree.column('rows', width=70, anchor=tk.CENTER)
+        self.job_tree.column('source', width=150, anchor=tk.W)
+        self.job_tree.pack(fill=tk.X, padx=1, pady=1)
+
+        job_btn_row = tk.Frame(job_card, bg=self.card_color)
+        job_btn_row.pack(fill=tk.X, padx=10, pady=(6, 8))
+        self._make_toolbar_btn(job_btn_row, '입력표로 불러오기', self.btn_neutral_bg, self.btn_neutral_hover, self.load_selected_job_to_sheet, fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(job_btn_row, '위로', self.btn_neutral_bg, self.btn_neutral_hover, lambda: self.move_selected_job(-1), fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(job_btn_row, '아래로', self.btn_neutral_bg, self.btn_neutral_hover, lambda: self.move_selected_job(1), fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(job_btn_row, '선택 삭제', self.btn_neutral_bg, self.btn_neutral_hover, self.delete_selected_job, fg=self.btn_neutral_fg)
+        self._make_toolbar_btn(job_btn_row, '목록 비우기', self.btn_neutral_bg, self.btn_neutral_hover, self.clear_job_queue, fg=self.btn_neutral_fg)
 
         # 3. 날짜 필터 카드
         filter_card = tk.Frame(self.fare_tab, bg=self.card_color, highlightbackground=self.border_color, highlightthickness=1)
@@ -1362,6 +1421,22 @@ class RpaGuiApp:
             self.airline_var.set(self.airline_label_by_value[code])
         elif not code:
             self.airline_var.set(AIRLINE_EMPTY_LABEL)
+
+    def _select_airline_combo_text(self, event=None):
+        if not hasattr(self, 'airline_combo'):
+            return
+
+        def select_all():
+            try:
+                if str(self.airline_combo.cget('state')) == tk.DISABLED:
+                    return
+                self.airline_combo.focus_set()
+                self.airline_combo.selection_range(0, tk.END)
+                self.airline_combo.icursor(tk.END)
+            except Exception:
+                pass
+
+        self.root.after_idle(select_all)
 
     def refresh_airline_options_from_erp(self, silent=False):
         if getattr(self, 'airline_refresh_thread', None) and self.airline_refresh_thread.is_alive():
@@ -2774,6 +2849,7 @@ class RpaGuiApp:
             'source_text': source_text,
             'airline_text': self.airline_var.get() if hasattr(self, 'airline_var') else AIRLINE_EMPTY_LABEL,
             'price_desc_text': self.price_desc_var.get() if hasattr(self, 'price_desc_var') else '',
+            'hotel_name_text': self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else '',
             'progress_text': self.progress_text_var.get() if hasattr(self, 'progress_text_var') else '',
             'active_cell': tuple(self._active_cell) if hasattr(self, '_active_cell') else (0, 0),
         }
@@ -2822,6 +2898,8 @@ class RpaGuiApp:
                 self.airline_var.set(snapshot.get('airline_text') or AIRLINE_EMPTY_LABEL)
             if hasattr(self, 'price_desc_var'):
                 self.price_desc_var.set(snapshot.get('price_desc_text') or '')
+            if hasattr(self, 'hotel_name_var'):
+                self.hotel_name_var.set(snapshot.get('hotel_name_text') or '')
             if hasattr(self, 'progress_text_var'):
                 self.progress_text_var.set(snapshot.get('progress_text') or '')
             active = snapshot.get('active_cell') or (0, 0)
@@ -3319,16 +3397,473 @@ class RpaGuiApp:
             self.airline_var.set(AIRLINE_EMPTY_LABEL)
         if hasattr(self, 'price_desc_var'):
             self.price_desc_var.set('')
+        if hasattr(self, 'hotel_name_var'):
+            self.hotel_name_var.set('')
         if hasattr(self, 'progress_text_var'):
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
+        self.selected_hotel_name = ''
         self.selected_progress_text = ''
+        self.fares_data = []
+        self.editing_job_index = None
         self.refresh_count()
         self._load_active_into_fb()
         self._sync_sheet_undo_baseline()
         self.set_status('입력표를 지우고 항공사코드 목록을 새로고침합니다.', self.fg_muted)
         self.refresh_airline_options_from_erp(silent=True)
+
+    def _normalize_job_airline_code(self, value):
+        raw = '' if value is None else str(value).strip()
+        if not raw or raw == AIRLINE_EMPTY_LABEL:
+            return ''
+        if raw in getattr(self, 'airline_value_by_label', {}):
+            return self.airline_value_by_label[raw]
+        bracket_match = re.match(r'^\[([^\]]+)\]', raw)
+        if bracket_match:
+            return bracket_match.group(1).strip().upper()
+        upper = raw.upper()
+        if re.fullmatch(r'[A-Z0-9]{1,3}', upper):
+            return upper
+
+        def compact(text):
+            return re.sub(r'\s+', '', str(text or '')).lower()
+
+        needle = compact(raw)
+        for code, label in getattr(self, 'airline_choices', []):
+            if code and needle and needle in compact(label):
+                return str(code).strip().upper()
+        return upper
+
+    def _job_condition_text(self, job):
+        price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
+        airline = str(job.get('airline_code') or '').strip() or '전체 항공사'
+        hotel_name = str(job.get('hotel_name') or '').strip()
+        parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}']
+        if hotel_name:
+            parts.append(f'호텔명 : {hotel_name}')
+        return ' / '.join(parts)
+
+    def _normalize_job(self, job):
+        rows = [dict(row) for row in (job.get('rows') or [])]
+        price_desc = str(job.get('price_desc') or '').strip()
+        airline_code = self._normalize_job_airline_code(job.get('airline_code'))
+        hotel_name = str(job.get('hotel_name') or '').strip()
+        progress_text = str(job.get('progress_text') or '').strip()
+        for row in rows:
+            row['price_desc'] = str(row.get('price_desc') or price_desc).strip()
+            row['airline_code'] = self._normalize_job_airline_code(row.get('airline_code') or airline_code)
+            row['hotel_name'] = str(row.get('hotel_name') or hotel_name).strip()
+            row['progress_status'] = str(row.get('progress_status') or progress_text).strip()
+        progress = dict(job.get('_progress') or {})
+        progress.setdefault('status', '대기')
+        progress.setdefault('done', 0)
+        progress.setdefault('success', 0)
+        progress.setdefault('fail', 0)
+        progress.setdefault('skip', 0)
+        progress['total'] = len(rows)
+        normalized_job = {
+            'price_desc': price_desc,
+            'airline_code': airline_code,
+            'hotel_name': hotel_name,
+            'progress_text': progress_text,
+            'rows': rows,
+            'source': str(job.get('source') or '').strip(),
+            '_progress': progress,
+        }
+        label = self._job_condition_text(normalized_job)
+        for row in rows:
+            row['_job_label'] = label
+            row['_job_source'] = normalized_job['source']
+        return normalized_job
+
+    def _assign_job_queue_metadata(self):
+        for idx, job in enumerate(self.job_queue):
+            job['_queue_index'] = idx
+            progress = dict(job.get('_progress') or {})
+            progress.setdefault('status', '대기')
+            progress.setdefault('done', 0)
+            progress.setdefault('success', 0)
+            progress.setdefault('fail', 0)
+            progress.setdefault('skip', 0)
+            progress['total'] = len(job.get('rows') or [])
+            job['_progress'] = progress
+            label = self._job_condition_text(job)
+            for row in job.get('rows') or []:
+                row['_job_index'] = idx
+                row['_job_label'] = label
+                row['_job_source'] = job.get('source') or ''
+
+    def _job_status_text(self, job):
+        progress = dict(job.get('_progress') or {})
+        status = str(progress.get('status') or '대기')
+        total = int(progress.get('total') or len(job.get('rows') or []) or 0)
+        done = int(progress.get('done') or 0)
+        success = int(progress.get('success') or 0)
+        fail = int(progress.get('fail') or 0)
+        skip = int(progress.get('skip') or 0)
+        if status == '대기':
+            return f'대기 0/{total}'
+        return f'{status} {done}/{total} · 성공 {success} / 실패 {fail} / 건너뜀 {skip}'
+
+    def _set_job_progress_ui(self, job_index, status=None, result_status=None):
+        if job_index is None:
+            return
+        try:
+            idx = int(job_index)
+        except (TypeError, ValueError):
+            return
+
+        def apply_update():
+            if not (0 <= idx < len(self.job_queue)):
+                return
+            job = self.job_queue[idx]
+            progress = dict(job.get('_progress') or {})
+            progress.setdefault('total', len(job.get('rows') or []))
+            progress.setdefault('done', 0)
+            progress.setdefault('success', 0)
+            progress.setdefault('fail', 0)
+            progress.setdefault('skip', 0)
+            if status:
+                progress['status'] = status
+            if result_status:
+                progress['done'] = int(progress.get('done') or 0) + 1
+                if result_status == 'SUCCESS':
+                    progress['success'] = int(progress.get('success') or 0) + 1
+                elif result_status == 'SKIP':
+                    progress['skip'] = int(progress.get('skip') or 0) + 1
+                else:
+                    progress['fail'] = int(progress.get('fail') or 0) + 1
+
+                total = int(progress.get('total') or 0)
+                done = int(progress.get('done') or 0)
+                if total and done >= total:
+                    if int(progress.get('fail') or 0):
+                        progress['status'] = '완료(실패 있음)'
+                    elif int(progress.get('success') or 0):
+                        progress['status'] = '완료'
+                    else:
+                        progress['status'] = '전체 건너뜀'
+                else:
+                    progress['status'] = '진행 중'
+            job['_progress'] = progress
+            self._refresh_job_queue_view()
+
+        try:
+            self.root.after(0, apply_update)
+        except Exception:
+            apply_update()
+
+    def _reset_job_progress_for_run(self, jobs):
+        for idx, job in enumerate(self.job_queue):
+            total = len(job.get('rows') or [])
+            job['_progress'] = {
+                'status': '대기',
+                'done': 0,
+                'success': 0,
+                'fail': 0,
+                'skip': 0,
+                'total': total,
+            }
+        for job in jobs:
+            idx = job.get('_queue_index')
+            if isinstance(idx, int) and 0 <= idx < len(self.job_queue):
+                self.job_queue[idx]['_progress']['total'] = len(job.get('rows') or [])
+        self._refresh_job_queue_view()
+
+    def _refresh_job_queue_view(self):
+        if not hasattr(self, 'job_tree'):
+            return
+        for item in self.job_tree.get_children():
+            self.job_tree.delete(item)
+        total_rows = 0
+        for idx, raw_job in enumerate(self.job_queue, start=1):
+            job = raw_job
+            row_count = len(job.get('rows') or [])
+            total_rows += row_count
+            condition = f"{idx}. {self._job_condition_text(job)}"
+            self.job_tree.insert(
+                '',
+                tk.END,
+                iid=str(idx - 1),
+                values=(condition, self._job_status_text(job), f'{row_count}건', job.get('source') or '수동'),
+            )
+        if hasattr(self, 'job_queue_summary_lbl'):
+            if self.job_queue:
+                self.job_queue_summary_lbl.config(text=f'{len(self.job_queue)}개 작업 · {total_rows}건')
+            else:
+                self.job_queue_summary_lbl.config(text='등록된 작업 없음')
+
+    def _update_start_button_label(self):
+        if not hasattr(self, 'start_btn'):
+            return
+        label = '▶  작업목록 수정 시작' if self.job_queue else '▶  요금수정 시작'
+        self.start_btn.config(text=label)
+
+    def _selected_job_indices(self):
+        if not hasattr(self, 'job_tree'):
+            return []
+        indices = []
+        for iid in self.job_tree.selection():
+            try:
+                idx = int(iid)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(self.job_queue):
+                indices.append(idx)
+        return sorted(set(indices))
+
+    def _select_job_index(self, index):
+        if not hasattr(self, 'job_tree') or index is None:
+            return
+        if not (0 <= index < len(self.job_queue)):
+            return
+        iid = str(index)
+        try:
+            self.job_tree.selection_set(iid)
+            self.job_tree.focus(iid)
+            self.job_tree.see(iid)
+        except Exception:
+            pass
+
+    def _set_job_queue(self, jobs, select_index=None):
+        self.job_queue = [self._normalize_job(job) for job in jobs if job.get('rows')]
+        self._assign_job_queue_metadata()
+        if self.editing_job_index is not None and not (0 <= self.editing_job_index < len(self.job_queue)):
+            self.editing_job_index = None
+        self._refresh_job_queue_view()
+        self._update_start_button_label()
+        total_rows = sum(len(job.get('rows') or []) for job in self.job_queue)
+        self.progress_bar['maximum'] = max(total_rows, 1)
+        self.progress_bar['value'] = 0
+        self.progress_lbl.config(text=f'0 / {total_rows} (0%)')
+        if select_index is not None:
+            self._select_job_index(max(0, min(select_index, len(self.job_queue) - 1)))
+
+    def _sheet_has_nonempty_data(self):
+        try:
+            rows = self.sheet.get_sheet_data()
+        except Exception:
+            return False
+        for row in rows:
+            if any(str(cell).strip() for cell in row if cell is not None):
+                return True
+        return False
+
+    def _clear_sheet_after_job_registration(self):
+        self.formulas.clear()
+        self._results.clear()
+        self._clear_merge_restore_snapshot()
+        self.period_mode_var.set(False)
+        self.sheet.headers(SHEET_HEADERS)
+        try:
+            self.sheet.set_column_widths([100, 80, 80, 80, 80, 80, 80, 80])
+        except Exception:
+            pass
+        self.sheet.set_sheet_data(
+            [["", "", "", "", "", "", "", ""] for _ in range(INITIAL_BLANK_ROWS)],
+            reset_col_positions=False,
+            reset_row_positions=True,
+        )
+        self._set_source_badge('')
+        if hasattr(self, 'airline_var'):
+            self.airline_var.set(AIRLINE_EMPTY_LABEL)
+        if hasattr(self, 'price_desc_var'):
+            self.price_desc_var.set('')
+        if hasattr(self, 'hotel_name_var'):
+            self.hotel_name_var.set('')
+        if hasattr(self, 'progress_text_var'):
+            self.progress_text_var.set('')
+        self.selected_airline_code = ''
+        self.selected_price_desc = ''
+        self.selected_hotel_name = ''
+        self.selected_progress_text = ''
+        self.fares_data = []
+        self.editing_job_index = None
+        self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
+
+    def add_current_sheet_to_job_queue(self):
+        if self.is_running:
+            messagebox.showwarning('실행 중', 'ERP 실행 중에는 작업을 추가할 수 없습니다.')
+            return
+        rows, errors = self.read_sheet_data()
+        if errors:
+            preview = "\n".join(errors[:10])
+            if len(errors) > 10:
+                preview += f"\n... 외 {len(errors) - 10}건"
+            msg = ("표에서 다음 행에 문제가 있습니다:\n\n"
+                   f"{preview}\n\n"
+                   "문제 행은 건너뛰고 정상 행만 작업 목록에 추가할까요?")
+            if not messagebox.askyesno('입력 확인', msg):
+                return
+        filtered = self._apply_date_filter(rows)
+        if not filtered:
+            messagebox.showwarning('데이터 없음', '작업 목록에 추가할 유효한 요금 행이 없습니다.')
+            return
+        airline_code = self._selected_airline_code()
+        price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
+        hotel_name = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
+        progress_text = ''
+        if not price_desc or not airline_code:
+            messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분과 항공사코드를 먼저 입력해 주세요.')
+            return
+        rows_for_job = []
+        for row in filtered:
+            item = dict(row)
+            item['price_desc'] = price_desc
+            item['airline_code'] = airline_code
+            item['hotel_name'] = hotel_name
+            item['progress_status'] = str(item.get('progress_status') or progress_text).strip()
+            rows_for_job.append(item)
+        new_job = self._normalize_job({
+            'price_desc': price_desc,
+            'airline_code': airline_code,
+            'hotel_name': hotel_name,
+            'progress_text': progress_text,
+            'rows': rows_for_job,
+            'source': '입력표',
+        })
+        replace_index = self.editing_job_index
+        if replace_index is not None and 0 <= replace_index < len(self.job_queue):
+            self.job_queue[replace_index] = new_job
+            select_index = replace_index
+            action_text = '수정 반영'
+        else:
+            self.job_queue.append(new_job)
+            select_index = len(self.job_queue) - 1
+            action_text = '추가'
+        self._set_job_queue(self.job_queue, select_index=select_index)
+        self._clear_sheet_after_job_registration()
+        self._select_job_index(select_index)
+        self.set_status(f'작업 목록에 {self._job_condition_text(new_job)} · {len(rows_for_job)}건을 {action_text}했습니다.', self.accent_green)
+
+    def load_selected_job_to_sheet(self):
+        if self.is_running:
+            return
+        selected = self._selected_job_indices()
+        if not selected:
+            messagebox.showinfo('작업 불러오기', '요금 입력표로 불러올 작업을 먼저 선택해 주세요.')
+            return
+        if len(selected) > 1:
+            messagebox.showinfo('작업 불러오기', '한 번에 하나의 작업만 입력표로 불러올 수 있습니다.')
+            return
+        if self._sheet_has_nonempty_data():
+            if not messagebox.askyesno('입력표 덮어쓰기', '현재 요금 입력표 내용을 지우고 선택한 작업을 불러올까요?'):
+                return
+        index = selected[0]
+        job = self._normalize_job(self.job_queue[index])
+        self._load_job_to_sheet(job)
+        self.editing_job_index = index
+        self._select_job_index(index)
+        self.set_status(f'작업을 입력표로 불러왔습니다. 수정 후 `작업 목록에 추가`를 누르면 목록에 반영됩니다.', self.accent_orange)
+
+    def _load_job_to_sheet(self, job):
+        rows = [dict(row) for row in (job.get('rows') or [])]
+        is_period = any(str(row.get('date_end') or row.get('date') or '') != str(row.get('date') or '') for row in rows)
+        self._record_sheet_undo_state('작업 입력표 불러오기')
+        self.period_mode_var.set(is_period)
+        headers = ["시작일", "종료일", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아", "유아"] if is_period else SHEET_HEADERS
+        col_widths = [100, 100, 75, 75, 75, 75, 75, 70, 70] if is_period else [100, 80, 80, 80, 80, 80, 80, 80]
+        self.sheet.headers(headers)
+        try:
+            self.sheet.set_column_widths(col_widths)
+        except Exception:
+            pass
+        def display_value(row, field):
+            if str(row.get('progress_status_field') or '') == field and str(row.get('progress_status') or '').strip():
+                return str(row.get('progress_status') or '').strip()
+            return str(row.get(field, ''))
+
+        if is_period:
+            grid = [[
+                row.get('date', ''),
+                row.get('date_end') or row.get('date', ''),
+                display_value(row, 'adult_air'),
+                display_value(row, 'adult_hotel'),
+                display_value(row, 'adult_land'),
+                display_value(row, 'adult_tour'),
+                display_value(row, 'adult_profit'),
+                display_value(row, 'child_fare'),
+                display_value(row, 'infant_fare'),
+            ] for row in rows]
+        else:
+            grid = [[
+                row.get('date', ''),
+                display_value(row, 'adult_air'),
+                display_value(row, 'adult_hotel'),
+                display_value(row, 'adult_land'),
+                display_value(row, 'adult_tour'),
+                display_value(row, 'adult_profit'),
+                display_value(row, 'child_fare'),
+                display_value(row, 'infant_fare'),
+            ] for row in rows]
+        self.formulas.clear()
+        self._results.clear()
+        self._clear_merge_restore_snapshot()
+        self.sheet.set_sheet_data(grid, reset_col_positions=False, reset_row_positions=True)
+        self.price_desc_var.set(str(job.get('price_desc') or ''))
+        self._select_airline_code(job.get('airline_code') or '', overwrite_blank_only=False)
+        self.hotel_name_var.set(str(job.get('hotel_name') or ''))
+        self.progress_text_var.set(str(job.get('progress_text') or ''))
+        self._set_source_badge(f"편집 중: {self._job_condition_text(job)}")
+        if not self.panel_expanded:
+            self.toggle_sheet_panel()
+        self.refresh_count()
+        self._load_active_into_fb()
+        self._sync_sheet_undo_baseline()
+
+    def move_selected_job(self, direction):
+        if self.is_running:
+            return
+        selected = self._selected_job_indices()
+        if not selected:
+            messagebox.showinfo('순서 변경', '순서를 바꿀 작업을 먼저 선택해 주세요.')
+            return
+        if len(selected) > 1:
+            messagebox.showinfo('순서 변경', '한 번에 하나의 작업만 이동할 수 있습니다.')
+            return
+        index = selected[0]
+        new_index = index + int(direction)
+        if not (0 <= new_index < len(self.job_queue)):
+            return
+        self.job_queue[index], self.job_queue[new_index] = self.job_queue[new_index], self.job_queue[index]
+        if self.editing_job_index == index:
+            self.editing_job_index = new_index
+        elif self.editing_job_index == new_index:
+            self.editing_job_index = index
+        self._set_job_queue(self.job_queue, select_index=new_index)
+        self.set_status('작업 실행 순서를 변경했습니다.', self.fg_muted)
+
+    def delete_selected_job(self):
+        if self.is_running:
+            return
+        selected = sorted(self._selected_job_indices(), reverse=True)
+        if not selected:
+            messagebox.showinfo('작업 삭제', '삭제할 작업을 먼저 선택해 주세요.')
+            return
+        old_editing_index = self.editing_job_index
+        for idx in selected:
+            if 0 <= idx < len(self.job_queue):
+                del self.job_queue[idx]
+        if old_editing_index is not None:
+            if old_editing_index in selected:
+                self.editing_job_index = None
+            else:
+                self.editing_job_index = old_editing_index - sum(1 for idx in selected if idx < old_editing_index)
+        self._set_job_queue(self.job_queue)
+        self.set_status('선택한 작업을 목록에서 삭제했습니다.', self.fg_muted)
+
+    def clear_job_queue(self):
+        if self.is_running:
+            return
+        if not self.job_queue:
+            return
+        if not messagebox.askyesno('작업 목록 비우기', '등록된 작업 목록을 모두 비울까요?'):
+            return
+        self.editing_job_index = None
+        self._set_job_queue([])
+        self.set_status('작업 목록을 비웠습니다.', self.fg_muted)
 
     @staticmethod
     def _merge_fare_records_preserving_gaps(records):
@@ -3472,6 +4007,40 @@ class RpaGuiApp:
         if not path:
             return
         try:
+            job_res = excel_loader.load_fare_jobs_from_excel(path)
+        except Exception as e:
+            messagebox.showerror('요금불러오기 실패', f'엑셀 작업 목록을 읽는 중 오류가 발생했습니다.\n{e}')
+            return
+        if job_res and job_res.get('detected'):
+            jobs = job_res.get('jobs') or []
+            errors = job_res.get('errors') or []
+            if not jobs:
+                preview = "\n".join(errors[:10]) if errors else '조건열은 감지됐지만 유효한 작업 행이 없습니다.'
+                messagebox.showwarning('작업 목록 없음', preview)
+                return
+            if self.job_queue:
+                append = messagebox.askyesno(
+                    '작업 목록 처리',
+                    '이미 등록된 작업 목록이 있습니다.\n\n'
+                    '예: 기존 목록 뒤에 추가\n'
+                    '아니오: 기존 목록을 지우고 새로 불러오기',
+                )
+                next_jobs = self.job_queue + jobs if append else jobs
+            else:
+                next_jobs = jobs
+            self._set_job_queue(next_jobs)
+            self._clear_sheet_after_job_registration()
+            self._set_source_badge(f'출처: 다중 작업 엑셀 ({os.path.basename(path)})')
+            total_rows = sum(len(job.get('rows') or []) for job in jobs)
+            self.set_status(f'엑셀에서 {len(jobs)}개 작업 · {total_rows}건을 작업 목록에 불러왔습니다.', self.accent_green)
+            if errors:
+                preview = "\n".join(errors[:10])
+                if len(errors) > 10:
+                    preview += f"\n... 외 {len(errors) - 10}건"
+                messagebox.showwarning('일부 행 확인', f'일부 행은 보정 또는 제외했습니다.\n\n{preview}')
+            return
+
+        try:
             data_res = excel_loader.load_and_validate_fares(path)
         except Exception as e:
             messagebox.showerror('요금불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{e}')
@@ -3479,8 +4048,15 @@ class RpaGuiApp:
         if not data_res or not data_res[0]:
             messagebox.showwarning('요금불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.')
             return
-            
+
         data, is_period = data_res
+        if self.job_queue and messagebox.askyesno(
+            '작업 목록 확인',
+            '단일 엑셀을 입력표로 불러옵니다.\n\n'
+            '기존 작업 목록이 있으면 실행 시 작업 목록이 우선됩니다.\n'
+            '기존 작업 목록을 비울까요?',
+        ):
+            self._set_job_queue([])
         self._record_sheet_undo_state('엑셀 불러오기')
         self._clear_merge_restore_snapshot()
         
@@ -3730,17 +4306,17 @@ class RpaGuiApp:
             child_cell = str(r_padded[col_child]).strip() if r_padded[col_child] is not None else ""
             infant_cell = str(r_padded[col_infant]).strip() if r_padded[col_infant] is not None else ""
             fare_text_cells = [
-                adult_air_cell,
-                adult_hotel_cell,
-                adult_land_cell,
-                adult_tour_cell,
-                adult_profit_cell,
-                child_cell,
-                infant_cell,
+                ("adult_air", adult_air_cell),
+                ("adult_hotel", adult_hotel_cell),
+                ("adult_land", adult_land_cell),
+                ("adult_tour", adult_tour_cell),
+                ("adult_profit", adult_profit_cell),
+                ("child_fare", child_cell),
+                ("infant_fare", infant_cell),
             ]
-            progress_status_text = next(
-                (cell for cell in fare_text_cells if self._progress_status_from_text(cell)[0]),
-                ""
+            progress_status_field, progress_status_text = next(
+                ((field, cell) for field, cell in fare_text_cells if self._progress_status_from_text(cell)[0]),
+                ("", ""),
             )
 
             line = i + 1
@@ -3795,6 +4371,7 @@ class RpaGuiApp:
                 "child_fare": child_fare, 
                 "infant_fare": infant_fare,
                 "progress_status": progress_status_text,
+                "progress_status_field": progress_status_field,
             })
         return rows, errors
 
@@ -3946,7 +4523,7 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
-            self.progress_text_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
+            self.hotel_name_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
         except Exception:
             pass
         try:
@@ -3964,25 +4541,73 @@ class RpaGuiApp:
         if self.is_running:
             messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
             return
-        rows, errors = self.read_sheet_data()
-        if errors:
-            preview = "\n".join(errors[:10])
-            if len(errors) > 10:
-                preview += f"\n... 외 {len(errors) - 10}건"
-            msg = ("표에서 다음 행에 문제가 있습니다:\n\n"
-                   f"{preview}\n\n"
-                   "문제 행은 건너뛰고 정상 행만 진행할까요?")
-            if not messagebox.askyesno('입력 확인', msg):
-                return
 
-        filtered = self._apply_date_filter(rows)
-        if not filtered:
-            messagebox.showwarning('데이터 없음', '실행할 유효한 요금 행이 없습니다.\n표 입력과 날짜 필터를 확인해 주세요.')
-            return
-        self.fares_data = filtered
-        self.selected_airline_code = self._selected_airline_code()
-        self.selected_price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
-        self.selected_progress_text = self.progress_text_var.get().strip() if hasattr(self, 'progress_text_var') else ''
+        if self.job_queue:
+            jobs = [self._normalize_job(job) for job in self.job_queue if job.get('rows')]
+            for queue_index, job in enumerate(jobs):
+                job['_queue_index'] = queue_index
+                for row in job.get('rows') or []:
+                    row['_job_index'] = queue_index
+                    row['_job_label'] = self._job_condition_text(job)
+                    row['_job_source'] = job.get('source') or ''
+            if not jobs:
+                messagebox.showwarning('작업 없음', '실행할 작업 목록이 없습니다.')
+                return
+            total_rows = sum(len(job.get('rows') or []) for job in jobs)
+            preview_lines = [
+                f"{idx}. {self._job_condition_text(job)} · {len(job.get('rows') or [])}건"
+                for idx, job in enumerate(jobs[:10], start=1)
+            ]
+            if len(jobs) > 10:
+                preview_lines.append(f"... 외 {len(jobs) - 10}개 작업")
+            msg = (
+                f"총 {len(jobs)}개 작업, {total_rows}건을 순서대로 실행합니다.\n\n"
+                + "\n".join(preview_lines)
+                + "\n\n계속 실행할까요?"
+            )
+            if not messagebox.askyesno('작업 목록 실행 확인', msg):
+                return
+            self.rpa_jobs_to_run = jobs
+            self.fares_data = [row for job in jobs for row in (job.get('rows') or [])]
+            first_job = jobs[0]
+            self.selected_airline_code = first_job.get('airline_code') or ''
+            self.selected_price_desc = first_job.get('price_desc') or ''
+            self.selected_hotel_name = first_job.get('hotel_name') or ''
+            self.selected_progress_text = first_job.get('progress_text') or ''
+            self._reset_job_progress_for_run(jobs)
+        else:
+            rows, errors = self.read_sheet_data()
+            if errors:
+                preview = "\n".join(errors[:10])
+                if len(errors) > 10:
+                    preview += f"\n... 외 {len(errors) - 10}건"
+                msg = ("표에서 다음 행에 문제가 있습니다:\n\n"
+                       f"{preview}\n\n"
+                       "문제 행은 건너뛰고 정상 행만 진행할까요?")
+                if not messagebox.askyesno('입력 확인', msg):
+                    return
+
+            filtered = self._apply_date_filter(rows)
+            if not filtered:
+                messagebox.showwarning('데이터 없음', '실행할 유효한 요금 행이 없습니다.\n표 입력과 날짜 필터를 확인해 주세요.')
+                return
+            self.fares_data = filtered
+            self.selected_airline_code = self._selected_airline_code()
+            self.selected_price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
+            self.selected_hotel_name = self.hotel_name_var.get().strip() if hasattr(self, 'hotel_name_var') else ''
+            self.selected_progress_text = ''
+            for row in self.fares_data:
+                row['price_desc'] = self.selected_price_desc
+                row['airline_code'] = self.selected_airline_code
+                row['hotel_name'] = self.selected_hotel_name
+            self.rpa_jobs_to_run = [{
+                'price_desc': self.selected_price_desc,
+                'airline_code': self.selected_airline_code,
+                'hotel_name': self.selected_hotel_name,
+                'progress_text': self.selected_progress_text,
+                'rows': filtered,
+                'source': '입력표',
+            }]
 
         self.is_running = True
         self.is_paused = False
@@ -4038,10 +4663,13 @@ class RpaGuiApp:
             sys.stdout = self.old_stdout
 
         self.start_btn.config(state=tk.NORMAL)
+        self._update_start_button_label()
         self.pause_btn.config(state=tk.DISABLED, text='‖  일시 중지', bg=self.accent_orange)
         self.stop_btn.config(state=tk.DISABLED, text='■  중지')
         self.is_running = False
         self.is_paused = False
+        self.rpa_jobs_to_run = []
+        self.current_rpa_job = None
         self._set_inputs_locked(False)
         self.progress_bar['value'] = 0
         self.progress_lbl.config(text=f'0 / {len(self.fares_data)} (0%)')
@@ -4999,6 +5627,7 @@ class RpaGuiApp:
             btn.config(state=tk.NORMAL)
         self.topas_stop_btn.config(state=tk.DISABLED, text='■  중지')
         self.start_btn.config(state=tk.NORMAL)
+        self._update_start_button_label()
         self.pause_btn.config(state=tk.DISABLED, text='‖  일시 중지', bg=self.accent_orange)
         self.stop_btn.config(state=tk.DISABLED, text='■  중지')
         self._set_inputs_locked(False)
@@ -5197,6 +5826,83 @@ class RpaGuiApp:
         if actual != value:
             raise RuntimeError(f"{label} 필드 값이 기대값과 다릅니다. 기대={value!r}, 실제={actual!r}")
         return result
+
+    def _set_erp_hotel_filter(self, selectors, hotel_name, timeout=3.0, poll=0.15):
+        hotel_name = '' if hotel_name is None else str(hotel_name).strip()
+        name_selector = selectors.get('hotel_name_input', '#hotelKorNm')
+        seq_selector = selectors.get('hotel_seq_input', '#hotelSeq')
+        result = self.driver.execute_script(
+            """
+            const nameSelector = arguments[0];
+            const seqSelector = arguments[1];
+            const value = arguments[2];
+            const el = document.querySelector(nameSelector);
+            const seq = document.querySelector(seqSelector);
+            if (!el) {
+                return {ok: false, reason: 'name_not_found'};
+            }
+            el.value = value;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            if (!value) {
+                if (seq) {
+                    seq.value = '';
+                    seq.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+                el.dispatchEvent(new Event('blur', {bubbles: true}));
+                return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', cleared: true};
+            }
+            try {
+                if (typeof autoHotel === 'function') {
+                    autoHotel({type: 'blur'}, el);
+                }
+            } catch (e) {
+                return {ok: false, reason: 'autoHotel_error', error: String(e)};
+            }
+            el.dispatchEvent(new Event('blur', {bubbles: true}));
+            return {ok: true, value: el.value || '', seq: seq ? (seq.value || '') : '', cleared: false};
+            """,
+            name_selector,
+            seq_selector,
+            hotel_name,
+        )
+        if not result or not result.get('ok'):
+            reason = result.get('reason') if isinstance(result, dict) else 'unknown'
+            if reason == 'name_not_found':
+                raise RuntimeError(f"호텔명 필드({name_selector})를 찾지 못했습니다.")
+            raise RuntimeError(f"호텔명 필드 설정 실패: {reason}")
+
+        if not hotel_name:
+            return result
+
+        deadline = time.time() + timeout
+        seq_value = str(result.get('seq') or '').strip()
+        actual_name = str(result.get('value') or '').strip()
+        while time.time() < deadline and not seq_value:
+            time.sleep(poll)
+            seq_value = self.driver.execute_script(
+                """
+                const seq = document.querySelector(arguments[0]);
+                return seq ? (seq.value || '') : '';
+                """,
+                seq_selector,
+            )
+            seq_value = str(seq_value or '').strip()
+            actual_name = self.driver.execute_script(
+                """
+                const el = document.querySelector(arguments[0]);
+                return el ? (el.value || '') : '';
+                """,
+                name_selector,
+            )
+            actual_name = str(actual_name or '').strip()
+
+        if not seq_value:
+            raise RuntimeError(
+                f"호텔명 '{hotel_name}'이 ERP 호텔키({seq_selector})로 매칭되지 않았습니다. "
+                "호텔명을 ERP 자동완성에서 단일 매칭되는 이름으로 입력해 주세요."
+            )
+        return {'ok': True, 'value': actual_name or hotel_name, 'seq': seq_value}
 
     def _set_erp_date_input(self, selector, value, label, attempts=4, pause=0.2):
         value = '' if value is None else str(value).strip()
@@ -5800,6 +6506,7 @@ class RpaGuiApp:
             total_items = len(self.fares_data)
 
             print(f"[RPA 정보] 총 {total_items}개의 날짜 데이터 처리를 시작합니다.")
+            last_job_label = None
             if not self.find_and_switch_frame(selectors["search_date_input"]):
                 err_text = "출발일자 입력 필드를 찾을 수 없어 ERP 조회 조건을 설정하지 못했습니다."
                 print(f"[오류] {err_text}")
@@ -5820,6 +6527,16 @@ class RpaGuiApp:
                 date_val = str(row["date"]).strip()
                 date_end_val = str(row.get("date_end", date_val)).strip()
                 date_log_str = f"{date_val} ~ {date_end_val}" if date_val != date_end_val else date_val
+                job_index = row.get("_job_index")
+                job_label = str(row.get("_job_label") or "").strip()
+                history_date_str = f"{job_label} / {date_log_str}" if job_label else date_log_str
+                if job_label and job_label != last_job_label:
+                    print(f"\n################ 작업 시작: {job_label} ################")
+                    source = str(row.get("_job_source") or "").strip()
+                    if source:
+                        print(f" -> 출처: {source}")
+                    last_job_label = job_label
+                self._set_job_progress_ui(job_index, status='진행 중')
 
                 adult_air = str(row.get("adult_air", "")).strip()
                 adult_hotel = str(row.get("adult_hotel", "")).strip()
@@ -5830,6 +6547,7 @@ class RpaGuiApp:
                 infant_val = str(row.get("infant_fare", "")).strip()
                 airline_code = str(row.get("airline_code") or self.selected_airline_code or "").strip().upper()
                 price_desc = str(row.get("price_desc") or self.selected_price_desc or "").strip()
+                hotel_name = str(row.get("hotel_name") or self.selected_hotel_name or "").strip()
                 progress_text = str(row.get("progress_status") or self.selected_progress_text or "").strip()
                 progress_code, progress_label = self._progress_status_from_text(progress_text)
 
@@ -5842,7 +6560,8 @@ class RpaGuiApp:
                 if not self.find_and_switch_frame(selectors["search_date_input"]):
                     err_msg = "출발일자 입력 필드를 찾을 수 없습니다."
                     print(f" -> [오류] {err_msg}")
-                    rpa_history.append({"date": date_log_str, "status": "FAIL", "error": err_msg})
+                    rpa_history.append({"date": history_date_str, "status": "FAIL", "error": err_msg})
+                    self._set_job_progress_ui(job_index, result_status='FAIL')
                     self.update_progress_ui(index + 1, total_items)
                     continue
 
@@ -5879,6 +6598,17 @@ class RpaGuiApp:
                         print(f" -> 요금구분 필터 설정: {price_desc_result.get('value') or price_desc}")
                     elif index == 0:
                         print(" -> 요금구분 필터 초기화: 전체 요금구분 대상")
+
+                    hotel_result = self._set_erp_hotel_filter(
+                        selectors,
+                        hotel_name,
+                        timeout=min(driver_timeout, 4),
+                        poll=erp_poll_interval,
+                    )
+                    if hotel_name:
+                        print(f" -> 호텔명 필터 설정: {hotel_result.get('value') or hotel_name} (hotelSeq={hotel_result.get('seq')})")
+                    elif index == 0:
+                        print(" -> 호텔명 필터 초기화: 전체 호텔 대상")
 
                     search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
                     self.driver.execute_script("arguments[0].click();", search_btn)
@@ -5927,9 +6657,44 @@ class RpaGuiApp:
 
                     if not matched:
                         print(f" -> [조회결과 없음] {date_log_str} 일자 데이터를 반영하지 못했습니다. ERP에서 직접 날짜 조회를 확인해 주세요.")
-                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "조회결과 없음"})
+                        rpa_history.append({"date": history_date_str, "status": "SKIP", "error": "조회결과 없음"})
+                        self._set_job_progress_ui(job_index, result_status='SKIP')
                         self.update_progress_ui(index + 1, total_items)
                         continue
+
+                    if hotel_name:
+                        expected_hotel_seq = str(hotel_result.get('seq') or '').strip()
+                        hotel_summary = self.driver.execute_script(
+                            """
+                            try {
+                                const rows = (typeof AUIGrid !== 'undefined') ? (AUIGrid.getGridData(arguments[0]) || []) : [];
+                                const expected = String(arguments[1] || '').trim();
+                                let mismatches = [];
+                                for (let i = 0; i < rows.length; i++) {
+                                    const seq = String(rows[i].hotelSeq == null ? '' : rows[i].hotelSeq).trim();
+                                    if (expected && seq !== expected) {
+                                        mismatches.push({row: i + 1, hotelSeq: seq, hotelKorNm: rows[i].hotelKorNm || ''});
+                                    }
+                                }
+                                return {total: rows.length, expected, mismatchCount: mismatches.length, mismatches: mismatches.slice(0, 3)};
+                            } catch(e) {
+                                return {total: 0, expected: String(arguments[1] || '').trim(), mismatchCount: -1, error: String(e)};
+                            }
+                            """,
+                            grid_id,
+                            expected_hotel_seq,
+                        )
+                        hotel_summary = hotel_summary or {'mismatchCount': -1, 'error': 'empty verification result'}
+                        mismatch_count = int(hotel_summary.get('mismatchCount') or 0)
+                        if mismatch_count < 0:
+                            raise RuntimeError(f"호텔명 필터 검증 중 오류: {hotel_summary.get('error')}")
+                        if mismatch_count > 0:
+                            sample = hotel_summary.get('mismatches') or []
+                            raise RuntimeError(
+                                f"호텔명 필터 검증 실패: 기대 hotelSeq={expected_hotel_seq}, "
+                                f"다른 호텔 행 {mismatch_count}건 감지 {sample}"
+                            )
+                        print(f" -> 호텔명 필터 검증: {hotel_summary.get('total', 0)}건 hotelSeq={expected_hotel_seq}")
 
                     # === 페이징 처리: 조회 결과 500건 초과 시 모든 페이지를 순회하며 저장 ===
                     # totalPage 변수는 행 바인딩보다 늦게 채워지므로(실측 지연), 행에 즉시 담기는
@@ -5953,8 +6718,9 @@ class RpaGuiApp:
                         if str(value).strip() != ""
                     }
                     if not inputs_mapping and not progress_code:
-                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 진행구분 변경값이 없습니다.")
-                        rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "입력/변경값 없음"})
+                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 예약마감 변경값이 없습니다.")
+                        rpa_history.append({"date": history_date_str, "status": "SKIP", "error": "입력/변경값 없음"})
+                        self._set_job_progress_ui(job_index, result_status='SKIP')
                         self.update_progress_ui(index + 1, total_items)
                         continue
 
@@ -6068,7 +6834,8 @@ class RpaGuiApp:
                             f"서버 지연 등 일시 오류일 수 있으니 이 날짜를 다시 실행해 주세요."
                         )
                         print(f" -> [부분 실패] {date_log_str}: {msg}")
-                        rpa_history.append({"date": date_log_str, "status": "FAIL", "error": msg})
+                        rpa_history.append({"date": history_date_str, "status": "FAIL", "error": msg})
+                        self._set_job_progress_ui(job_index, result_status='FAIL')
                     else:
                         skip_note = ""
                         if pages_price_skipped_all_closed:
@@ -6078,14 +6845,17 @@ class RpaGuiApp:
                         else:
                             print(f" -> [성공] {date_log_str} {done_summary} 완료{skip_note}")
                         if inputs_mapping and not progress_code and pages_price_skipped_all_closed == total_pages:
-                            rpa_history.append({"date": date_log_str, "status": "SKIP", "error": "전체 예약마감으로 요금 업데이트 대상 없음"})
+                            rpa_history.append({"date": history_date_str, "status": "SKIP", "error": "전체 예약마감으로 요금 업데이트 대상 없음"})
+                            self._set_job_progress_ui(job_index, result_status='SKIP')
                         else:
-                            rpa_history.append({"date": date_log_str, "status": "SUCCESS", "error": ""})
+                            rpa_history.append({"date": history_date_str, "status": "SUCCESS", "error": ""})
+                            self._set_job_progress_ui(job_index, result_status='SUCCESS')
 
                 except Exception as row_ex:
                     err_msg = str(row_ex).replace("\n", " ")
                     print(f" -> [실패] 오류 발생: {err_msg}")
-                    rpa_history.append({"date": date_log_str, "status": "FAIL", "error": err_msg})
+                    rpa_history.append({"date": history_date_str, "status": "FAIL", "error": err_msg})
+                    self._set_job_progress_ui(job_index, result_status='FAIL')
 
                     try:
                         self.driver.switch_to.alert.accept()
