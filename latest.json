@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.7",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.7/NaeilERPUpdater_Setup_v5.0.7.exe",
-    "sha256":  "F3150575C20E955430E23A95BB1E572298D0BDD7CA568AE1CF37C9EBBCAA8EBF",
+    "version":  "v5.0.8",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.8/NaeilERPUpdater_Setup_v5.0.8.exe",
+    "sha256":  "0DE8098B1BBF4095E974759083FD44D2959001BC056B9BA18C8047472424F19F",
     "notes":  [
-                  "호텔명 검색칸에서 입력만 해도 ERP 호텔 DB 후보를 자동으로 표시합니다.",
-                  "검색 후보가 없으면 입력칸 아래에 검색 결과 없음을 표시합니다.",
-                  "호텔 선택 시 hotelSeq를 작업목록에 저장하고 실행 전 ERP 매칭값을 검증합니다."
+                  "프로그램 조건이 비어 있을 때 ERP 화면의 요금구분, 항공사, 호텔명 조건을 가져올지 실행 전에 확인합니다.",
+                  "ERP 화면 조건을 가져오면 호텔명은 hotelSeq까지 함께 보존해 실행 조건으로 사용합니다.",
+                  "아니오를 선택하면 기존처럼 프로그램에 입력된 조건 그대로 실행합니다."
               ]
 }

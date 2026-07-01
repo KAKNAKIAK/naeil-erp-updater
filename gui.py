@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.7"
+APP_VERSION = "v5.0.8"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -1654,6 +1654,43 @@ class RpaGuiApp:
             return str(record.get('name') or '').strip(), str(record.get('seq') or '').strip()
         self.current_hotel_seq = ''
         return text, ''
+
+    def _remember_imported_hotel_condition(self, hotel_name, hotel_seq=''):
+        hotel_name = '' if hotel_name is None else str(hotel_name).strip()
+        hotel_seq = '' if hotel_seq is None else str(hotel_seq).strip()
+        if not hotel_name:
+            if hasattr(self, 'hotel_name_var'):
+                self.hotel_name_var.set('')
+            self.current_hotel_seq = ''
+            return
+
+        if hotel_seq:
+            record = {
+                'seq': hotel_seq,
+                'name': hotel_name,
+                'eng_name': '',
+                'nation': '',
+                'city': '',
+                'use_yn': '',
+                'sort_order': None,
+            }
+            record['label'] = self._format_hotel_label(record)
+            existing = [
+                item for item in getattr(self, 'hotel_choices', [])
+                if str(item.get('seq') or '').strip() != hotel_seq
+            ]
+            existing.append(record)
+            self.hotel_choices = existing
+            self.hotel_record_by_label = {item['label']: item for item in existing}
+            self.hotel_record_by_seq = {item['seq']: item for item in existing}
+            if hasattr(self, 'hotel_name_combo'):
+                self.hotel_name_combo.config(values=[item['label'] for item in existing])
+            self._select_hotel_record(record)
+            return
+
+        self.current_hotel_seq = ''
+        if hasattr(self, 'hotel_name_var'):
+            self.hotel_name_var.set(hotel_name)
 
     def _on_hotel_combo_selected(self, event=None):
         record = self._hotel_record_from_text(self.hotel_name_var.get())
@@ -4918,6 +4955,154 @@ class RpaGuiApp:
         except Exception:
             pass
 
+    def _current_direct_run_conditions(self):
+        hotel_name, hotel_seq = self._selected_hotel_filter()
+        return {
+            'price_desc': self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else '',
+            'airline_code': self._selected_airline_code(),
+            'hotel_name': hotel_name,
+            'hotel_seq': hotel_seq,
+        }
+
+    @staticmethod
+    def _pending_erp_condition_imports(current_conditions, erp_conditions):
+        current_conditions = current_conditions or {}
+        erp_conditions = erp_conditions or {}
+        pending = {}
+        if not str(current_conditions.get('price_desc') or '').strip():
+            price_desc = str(erp_conditions.get('price_desc') or '').strip()
+            if price_desc:
+                pending['price_desc'] = price_desc
+        if not str(current_conditions.get('airline_code') or '').strip():
+            airline_code = str(erp_conditions.get('airline_code') or '').strip().upper()
+            if airline_code:
+                pending['airline_code'] = airline_code
+                pending['airline_text'] = str(erp_conditions.get('airline_text') or '').strip()
+        if not str(current_conditions.get('hotel_name') or '').strip():
+            hotel_name = str(erp_conditions.get('hotel_name') or '').strip()
+            if hotel_name:
+                pending['hotel_name'] = hotel_name
+                pending['hotel_seq'] = str(erp_conditions.get('hotel_seq') or '').strip()
+        return pending
+
+    def _format_erp_condition_import_message(self, pending):
+        lines = [
+            'ERP 화면에 입력된 검색 조건을 발견했습니다.',
+            '',
+            '프로그램에서 비어 있는 조건만 이번 작업 조건으로 가져옵니다.',
+            '',
+        ]
+        if pending.get('price_desc'):
+            lines.append(f"요금구분: {pending['price_desc']}")
+        if pending.get('airline_code'):
+            airline_text = pending.get('airline_text') or pending['airline_code']
+            lines.append(f"항공사: {airline_text}")
+        if pending.get('hotel_name'):
+            hotel_text = pending['hotel_name']
+            if pending.get('hotel_seq'):
+                hotel_text = f"{hotel_text} (hotelSeq {pending['hotel_seq']})"
+            else:
+                hotel_text = f"{hotel_text} (hotelSeq 없음)"
+            lines.append(f"호텔명: {hotel_text}")
+        lines.extend([
+            '',
+            '이 조건을 가져와서 실행할까요?',
+            '',
+            '아니오를 누르면 프로그램에 입력된 조건 그대로 실행합니다.',
+        ])
+        return '\n'.join(lines)
+
+    def _apply_imported_erp_conditions(self, pending):
+        pending = pending or {}
+        if pending.get('price_desc') and hasattr(self, 'price_desc_var'):
+            self.price_desc_var.set(str(pending.get('price_desc') or '').strip())
+        if pending.get('airline_code'):
+            self._select_airline_code(pending.get('airline_code'), overwrite_blank_only=False)
+        if pending.get('hotel_name'):
+            self._remember_imported_hotel_condition(
+                pending.get('hotel_name'),
+                pending.get('hotel_seq'),
+            )
+
+    def _read_erp_screen_conditions(self, selectors):
+        selectors = selectors or {}
+        price_selector = selectors.get('price_desc_input', '#priceDesc')
+        airline_selector = selectors.get('airline_select', '#air2Cd')
+        hotel_name_selector = selectors.get('hotel_name_input', '#hotelKorNm')
+        hotel_seq_selector = selectors.get('hotel_seq_input', '#hotelSeq')
+        result = self.driver.execute_script(
+            """
+            const priceSelector = arguments[0];
+            const airlineSelector = arguments[1];
+            const hotelNameSelector = arguments[2];
+            const hotelSeqSelector = arguments[3];
+            const valueOf = (selector) => {
+                const el = document.querySelector(selector);
+                return el ? String(el.value || '').trim() : '';
+            };
+            const priceDesc = valueOf(priceSelector);
+            const hotelName = valueOf(hotelNameSelector);
+            const hotelSeq = valueOf(hotelSeqSelector);
+            const airline = document.querySelector(airlineSelector);
+            let airlineCode = '';
+            let airlineText = '';
+            if (airline) {
+                airlineCode = String(airline.value || '').trim().toUpperCase();
+                const selected = airline.options && airline.selectedIndex >= 0 ? airline.options[airline.selectedIndex] : null;
+                airlineText = selected ? String(selected.textContent || '').trim() : '';
+            }
+            if (!airlineCode || airlineText === '_선택_') {
+                airlineCode = '';
+                airlineText = '';
+            }
+            return {
+                price_desc: priceDesc,
+                airline_code: airlineCode,
+                airline_text: airlineText,
+                hotel_name: hotelName,
+                hotel_seq: hotelSeq
+            };
+            """,
+            price_selector,
+            airline_selector,
+            hotel_name_selector,
+            hotel_seq_selector,
+        )
+        return result or {}
+
+    def _try_import_erp_conditions_for_direct_run(self):
+        current = self._current_direct_run_conditions()
+        if all(str(current.get(key) or '').strip() for key in ('price_desc', 'airline_code', 'hotel_name')):
+            return current
+
+        selectors = self.config.get('selectors', {})
+        driver = None
+        previous_driver = self.driver
+        try:
+            driver, _browser_config = self._connect_matching_debug_browser('ERP', selectors)
+            self.driver = driver
+            if not self.find_and_switch_frame(selectors.get('search_date_input', '#searchStDate')):
+                return current
+            erp_conditions = self._read_erp_screen_conditions(selectors)
+        except Exception:
+            return current
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            self.driver = previous_driver
+
+        pending = self._pending_erp_condition_imports(current, erp_conditions)
+        if not pending:
+            return current
+        if not messagebox.askyesno('ERP 조건 가져오기', self._format_erp_condition_import_message(pending)):
+            return current
+
+        self._apply_imported_erp_conditions(pending)
+        return self._current_direct_run_conditions()
+
     # ------------------------------------------------------------------
     # RPA 실행 제어
     # ------------------------------------------------------------------
@@ -4977,9 +5162,11 @@ class RpaGuiApp:
                 messagebox.showwarning('데이터 없음', '실행할 유효한 요금 행이 없습니다.\n표 입력과 날짜 필터를 확인해 주세요.')
                 return
             self.fares_data = filtered
-            self.selected_airline_code = self._selected_airline_code()
-            self.selected_price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
-            self.selected_hotel_name, self.selected_hotel_seq = self._selected_hotel_filter()
+            run_conditions = self._try_import_erp_conditions_for_direct_run()
+            self.selected_airline_code = str(run_conditions.get('airline_code') or '').strip().upper()
+            self.selected_price_desc = str(run_conditions.get('price_desc') or '').strip()
+            self.selected_hotel_name = str(run_conditions.get('hotel_name') or '').strip()
+            self.selected_hotel_seq = str(run_conditions.get('hotel_seq') or '').strip()
             self.selected_progress_text = ''
             for row in self.fares_data:
                 row['price_desc'] = self.selected_price_desc
