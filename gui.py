@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.12"
+APP_VERSION = "v5.0.13"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -3460,18 +3460,22 @@ class RpaGuiApp:
     def _on_begin_edit(self, event=None):
         """인셀 편집 시작 훅.
         - 일반 칸: 그대로 편집(반환값이 에디터 텍스트가 됨).
-        - 수식이 들어있는 칸: 편집 대신 '수식 전체 적용' 안내 → 편집 취소(None)."""
+        - 수식 칸: 편집 대신 '수식 전체 적용' 안내 → 편집 취소(None).
+        - 일반 값 칸: 더블클릭으로 편집을 시작한 경우 열 전체 채우기 안내 → 편집 취소(None)."""
         try:
             r = event['row']
             c = event['column']
             value = event['value']
+            key = event.get('key') if hasattr(event, 'get') else event['key']
         except Exception:
             try:
                 r, c, value = event.row, event.column, event.value
+                key = getattr(event, 'key', None)
             except Exception:
                 return None
-        if (r, c) in self.formulas:
-            self.root.after(1, lambda rr=r, cc=c: self._prompt_apply_formula(rr, cc))
+        source_value, is_formula = self._cell_fill_source(r, c)
+        if is_formula or (key == '??' and source_value is not None):
+            self.root.after(1, lambda rr=r, cc=c: self._prompt_apply_cell_to_column(rr, cc))
             return None  # 인셀 편집 취소
         return value
 
@@ -3491,33 +3495,91 @@ class RpaGuiApp:
                     break
         return last
 
-    def _prompt_apply_formula(self, r, c):
+    def _cell_fill_source(self, r, c):
+        """열 전체 채우기에 쓸 원본 값/수식. 날짜 칸과 빈 칸은 대상에서 제외한다."""
+        if self.is_date_col(c):
+            return None, False
         formula = self.formulas.get((r, c))
-        if not formula:
+        if formula:
+            return formula, True
+        try:
+            value = self.sheet.get_cell_data(r, c)
+        except Exception:
+            try:
+                data = self.sheet.get_sheet_data()
+                value = data[r][c]
+            except Exception:
+                value = ''
+        text = '' if value is None else str(value)
+        if not text.strip():
+            return None, False
+        if text.lstrip().startswith('='):
+            return text, True
+        return text, False
+
+    def _preview_fill_source(self, value):
+        text = '' if value is None else str(value)
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        if len(text) > 120:
+            text = text[:117] + '...'
+        return text
+
+    def _prompt_apply_formula(self, r, c):
+        self._prompt_apply_cell_to_column(r, c)
+
+    def _prompt_apply_cell_to_column(self, r, c):
+        source_value, is_formula = self._cell_fill_source(r, c)
+        if source_value is None:
             return
-        headers = self.sheet.headers()
-        col_name = headers[c] if c < len(headers) else f'{c}열'
+        try:
+            headers = self.sheet.headers()
+            col_name = headers[c] if c < len(headers) else f'{c}열'
+        except Exception:
+            col_name = f'{c}열'
         last = self._last_data_row()
         rows_n = last + 1 if last >= 0 else 0
-        msg = (f"이 칸의 계산식\n\n    {formula}\n\n"
-               f"을(를) '{col_name}' 열 전체(데이터가 있는 {rows_n}개 행)에 똑같이 적용할까요?\n"
-               f"(각 행의 같은 줄 값을 기준으로 계산됩니다)")
-        if messagebox.askyesno('수식 전체 적용', msg):
-            self._apply_formula_to_column(c, formula)
+        preview = self._preview_fill_source(source_value)
+        if is_formula:
+            title = '수식 전체 적용'
+            msg = (f"이 칸의 계산식\n\n    {preview}\n\n"
+                   f"을(를) '{col_name}' 열 전체(데이터가 있는 {rows_n}개 행)에 똑같이 적용할까요?\n"
+                   f"(각 행의 같은 줄 값을 기준으로 계산됩니다)")
+        else:
+            title = '값 전체 채우기'
+            msg = (f"이 칸의 값\n\n    {preview}\n\n"
+                   f"을(를) '{col_name}' 열 전체(데이터가 있는 {rows_n}개 행)에 같은 값으로 채울까요?\n"
+                   f"(기존 수식 칸도 이 값으로 바뀝니다)")
+        if messagebox.askyesno(title, msg):
+            self._apply_cell_to_column(c, source_value, is_formula=is_formula)
 
     def _apply_formula_to_column(self, col, formula):
-        """formula를 col 열의 0~마지막 데이터 행까지 모두 적용하고 재계산한다."""
+        self._apply_cell_to_column(col, formula, is_formula=True)
+
+    def _apply_cell_to_column(self, col, value, is_formula=False):
+        """value/formula를 col 열의 0~마지막 데이터 행까지 모두 적용한다."""
         last = self._last_data_row()
         if last < 0:
             return
-        self._record_sheet_undo_state('수식 전체 적용')
-
-        for i in range(last + 1):
-            self.formulas[(i, col)] = formula
-            self._results.pop((i, col), None)
+        self._record_sheet_undo_state('수식 전체 적용' if is_formula else '값 전체 채우기')
         self._recalc_busy = True
         try:
-            self._recalc_formulas()
+            for i in range(last + 1):
+                self._results.pop((i, col), None)
+                if is_formula:
+                    self.formulas[(i, col)] = value
+                else:
+                    self.formulas.pop((i, col), None)
+                    try:
+                        self.sheet.set_cell_data(i, col, value, redraw=False)
+                    except Exception:
+                        pass
+            if is_formula:
+                self._recalc_formulas()
+            else:
+                try:
+                    self.sheet.redraw()
+                except Exception:
+                    pass
         finally:
             self._recalc_busy = False
 
@@ -3528,7 +3590,8 @@ class RpaGuiApp:
             col_name = self.sheet.headers()[col]
         except Exception:
             col_name = f'{col}열'
-        self.set_status(f"'{col_name}' 열 {last + 1}개 행에 수식을 적용했습니다.", self.accent_green)
+        action = '수식을 적용했' if is_formula else '값을 채웠'
+        self.set_status(f"'{col_name}' 열 {last + 1}개 행에 {action}습니다.", self.accent_green)
 
     # 칸 참조 이름 → 컬럼 인덱스 매핑
     def _name_to_col(self, name, cur_col):
@@ -5063,7 +5126,9 @@ class RpaGuiApp:
             '',
             '이 조건을 가져와서 실행할까요?',
             '',
-            '아니오를 누르면 프로그램에 입력된 조건 그대로 실행합니다.',
+            '예: ERP 화면 조건을 가져와서 실행',
+            '아니오: 프로그램에 입력된 조건 그대로 실행',
+            '취소: 실행하지 않고 입력표로 돌아가기',
         ])
         return '\n'.join(lines)
 
@@ -5152,7 +5217,10 @@ class RpaGuiApp:
         pending = self._pending_erp_condition_imports(current, erp_conditions)
         if not pending:
             return current
-        if not messagebox.askyesno('ERP 조건 가져오기', self._format_erp_condition_import_message(pending)):
+        choice = messagebox.askyesnocancel('ERP 조건 가져오기', self._format_erp_condition_import_message(pending))
+        if choice is None:
+            return None
+        if choice is False:
             return current
 
         self._apply_imported_erp_conditions(pending)
@@ -5241,6 +5309,10 @@ class RpaGuiApp:
                 return
             self.fares_data = filtered
             run_conditions = self._try_import_erp_conditions_for_direct_run()
+            if run_conditions is None:
+                self.fares_data = []
+                self.set_status('요금수정 실행을 취소했습니다.', self.fg_muted)
+                return
             self.selected_airline_code = str(run_conditions.get('airline_code') or '').strip().upper()
             self.selected_price_desc = str(run_conditions.get('price_desc') or '').strip()
             self.selected_hotel_name = str(run_conditions.get('hotel_name') or '').strip()

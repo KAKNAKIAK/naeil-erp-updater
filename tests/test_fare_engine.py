@@ -47,6 +47,55 @@ SEASONS = [
 
 
 class FareEngineTest(unittest.TestCase):
+    def _make_fill_app(self, data, formulas=None, results=None):
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Sheet:
+            def __init__(self, rows):
+                self.data = [list(row) for row in rows]
+                self._headers = ["날짜", "항공비", "호텔비", "지상비", "여행경비", "알선수익", "소아요금", "유아요금"]
+                self.redrawn = False
+
+            def get_sheet_data(self):
+                return self.data
+
+            def get_cell_data(self, r, c):
+                try:
+                    return self.data[r][c]
+                except IndexError:
+                    return ""
+
+            def set_cell_data(self, r, c, value, **_kwargs):
+                while len(self.data[r]) <= c:
+                    self.data[r].append("")
+                self.data[r][c] = value
+
+            def headers(self):
+                return self._headers
+
+            def redraw(self):
+                self.redrawn = True
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.period_mode_var = Var(False)
+        app.sheet = Sheet(data)
+        app.formulas = dict(formulas or {})
+        app._results = dict(results or {})
+        app._recalc_busy = False
+        app._record_sheet_undo_state = lambda *_args, **_kwargs: None
+        app.refresh_count = lambda: None
+        app._load_active_into_fb = lambda: None
+        app._sync_sheet_undo_baseline = lambda: None
+        app.accent_green = "green"
+        app.status = None
+        app.set_status = lambda text, color: setattr(app, "status", (text, color))
+        return app
+
     def test_parser_uses_future_year_and_available_4_to_9_only(self):
         parsed = parse_topas_text(DEP_TEXT, today=date(2026, 6, 11))
 
@@ -199,6 +248,43 @@ class FareEngineTest(unittest.TestCase):
 
         self.assertEqual(app.sheet.data[0][1], "예약마감")
         self.assertEqual(app.hotel_name_var.get(), "두짓비치 괌")
+
+    def test_double_click_fill_applies_plain_value_to_last_data_row(self):
+        app = self._make_fill_app(
+            [
+                ["2026-07-15", "예약마감", "", "", "", "", "", ""],
+                ["2026-07-16", "100000", "", "", "", "", "", ""],
+                ["2026-07-17", "", "", "", "", "", "", ""],
+            ],
+            formulas={(1, 1): "=호텔비"},
+            results={(1, 1): "0"},
+        )
+
+        with mock.patch("gui.messagebox.askyesno", return_value=True) as askyesno:
+            app._prompt_apply_cell_to_column(0, 1)
+
+        askyesno.assert_called_once()
+        self.assertEqual([row[1] for row in app.sheet.data], ["예약마감", "예약마감", "예약마감"])
+        self.assertEqual(app.formulas, {})
+        self.assertEqual(app._results, {})
+        self.assertEqual(app.status, ("'항공비' 열 3개 행에 값을 채웠습니다.", "green"))
+
+    def test_double_click_fill_keeps_formula_as_formula(self):
+        app = self._make_fill_app(
+            [
+                ["2026-07-15", "100000", "20000", "", "", "", "", ""],
+                ["2026-07-16", "300000", "40000", "", "", "", "", ""],
+            ],
+            formulas={(0, 5): "=항공비+호텔비"},
+        )
+
+        with mock.patch("gui.messagebox.askyesno", return_value=True):
+            app._prompt_apply_cell_to_column(0, 5)
+
+        self.assertEqual(app.formulas, {(0, 5): "=항공비+호텔비", (1, 5): "=항공비+호텔비"})
+        self.assertEqual(app.sheet.data[0][5], "120000")
+        self.assertEqual(app.sheet.data[1][5], "340000")
+        self.assertEqual(app.status, ("'알선수익' 열 2개 행에 수식을 적용했습니다.", "green"))
 
     def test_current_page_progress_counts_detects_reservation_closed(self):
         class Driver:
@@ -486,7 +572,7 @@ class FareEngineTest(unittest.TestCase):
             "hotel_seq": "7864",
         }
 
-        with mock.patch("gui.messagebox.askyesno", return_value=True) as askyesno:
+        with mock.patch("gui.messagebox.askyesnocancel", return_value=True) as askyesnocancel:
             conditions = app._try_import_erp_conditions_for_direct_run()
 
         self.assertTrue(driver.quit_called)
@@ -498,10 +584,59 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(app.price_desc_var.get(), "2N3D_TYO_LCC_ICN")
         self.assertEqual(app._selected_airline_code(), "LJ")
         self.assertEqual(app._selected_hotel_filter(), ("아미아나 나트랑", "7864"))
-        confirm_msg = askyesno.call_args.args[1]
+        confirm_msg = askyesnocancel.call_args.args[1]
         self.assertIn("요금구분: 2N3D_TYO_LCC_ICN", confirm_msg)
         self.assertIn("항공사: [LJ] 진에어", confirm_msg)
         self.assertIn("호텔명: 아미아나 나트랑 (hotelSeq 7864)", confirm_msg)
+        self.assertIn("취소: 실행하지 않고 입력표로 돌아가기", confirm_msg)
+
+    def test_direct_run_condition_import_cancel_aborts_run_choice(self):
+        class Var:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class Driver:
+            def __init__(self):
+                self.quit_called = False
+
+            def quit(self):
+                self.quit_called = True
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.config = {"selectors": {"search_date_input": "#searchStDate"}}
+        app.driver = None
+        app.price_desc_var = Var("")
+        app.airline_var = Var(AIRLINE_EMPTY_LABEL)
+        app.hotel_name_var = Var("")
+        app.current_hotel_seq = ""
+        app.hotel_choices = []
+        app.hotel_record_by_label = {}
+        app.hotel_record_by_seq = {}
+        app._set_airline_choices([("LJ", "진에어")])
+        driver = Driver()
+        app._connect_matching_debug_browser = lambda *_args, **_kwargs: (driver, {"address": "127.0.0.1:9223"})
+        app.find_and_switch_frame = lambda *_args, **_kwargs: True
+        app._read_erp_screen_conditions = lambda _selectors: {
+            "price_desc": "ERP_요금",
+            "airline_code": "LJ",
+            "airline_text": "[LJ] 진에어",
+            "hotel_name": "",
+            "hotel_seq": "",
+        }
+
+        with mock.patch("gui.messagebox.askyesnocancel", return_value=None):
+            conditions = app._try_import_erp_conditions_for_direct_run()
+
+        self.assertTrue(driver.quit_called)
+        self.assertIsNone(conditions)
+        self.assertEqual(app.price_desc_var.get(), "")
+        self.assertEqual(app._selected_airline_code(), "")
 
     def test_erp_condition_import_keeps_existing_program_conditions(self):
         current = {

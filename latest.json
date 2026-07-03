@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.12",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.12/NaeilERPUpdater_Setup_v5.0.12.exe",
-    "sha256":  "ABAA6300A3C57A82F7F736CA810E801F5E0D4031989A24936085C6A62EFF5CA7",
+    "version":  "v5.0.13",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.13/NaeilERPUpdater_Setup_v5.0.13.exe",
+    "sha256":  "EB46160BFB45BC70DEFF2CDDF63F3E926DFAB9E063F0F5CAE5CC2ED1528E302C",
     "notes":  [
-                  "작업 전환 직후 첫 조회에서 이전 호텔의 hidden hotelSeq가 남는 문제를 수정했습니다.",
-                  "새 호텔명을 입력하기 전에 ERP hidden hotelSeq를 먼저 비우고 새 자동매칭 값을 기다립니다.",
-                  "두짓비치에서 니코처럼 호텔 작업이 바뀌는 첫 행도 이전 호텔 조건으로 조회되지 않게 했습니다."
+                  "입력표 요금 칸 더블클릭 시 수식뿐 아니라 숫자와 텍스트도 마지막 데이터 행까지 채울 수 있게 했습니다.",
+                  "값 전체 채우기는 확인창을 거친 뒤 적용되며, 기존 수식 칸은 선택한 값으로 대체됩니다.",
+                  "단일 실행 중 ERP 화면 조건을 발견했을 때 예/아니오/취소 선택지를 제공해 취소 시 실행하지 않고 입력표로 돌아가게 했습니다."
               ]
 }
