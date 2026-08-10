@@ -1,7 +1,7 @@
 {
-    "version":  "v5.0.15",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.15/NaeilERPUpdater_Setup_v5.0.15.exe",
-    "sha256":  "62E7B15DBDCEF20BEFA6B44D013D2A15E2DBFE7A38330DEB0FEC26879CBC9D93",
+    "version":  "v5.0.16",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.16/NaeilERPUpdater_Setup_v5.0.16.exe",
+    "sha256":  "CEB9F006ADE64CFCF428EE51B3A75852F096813C9B30D623C3A0FEF4F107DCDC",
     "notes":  [
                   "호텔비를 수정하기 전에 ERP에서 수정 가능한 행을 모두 예약신청으로 변경합니다.",
                   "기존 예약신청은 유지하고 예약마감 행은 ERP 정책대로 제외합니다.",
