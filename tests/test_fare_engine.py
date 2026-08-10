@@ -199,31 +199,39 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(RpaGuiApp._progress_status_from_text("예약 신청"), ("04", "예약신청"))
         self.assertEqual(RpaGuiApp._progress_status_from_text("예약 마감"), ("05", "예약마감"))
 
-    def test_hotel_update_promotes_pending_reservation_before_price_update(self):
+    def test_hotel_update_sets_reservation_requested_before_price_update(self):
         self.assertTrue(
-            RpaGuiApp._should_promote_pending_for_hotel_update(
-                "06",
+            RpaGuiApp._should_set_reservation_requested_for_hotel_update(
                 {"adult_hotel_input": "434415"},
             )
         )
         self.assertTrue(
-            RpaGuiApp._should_promote_pending_for_hotel_update(
-                "06",
+            RpaGuiApp._should_set_reservation_requested_for_hotel_update(
                 {"adult_hotel_input": "0"},
             )
         )
         self.assertFalse(
-            RpaGuiApp._should_promote_pending_for_hotel_update(
-                "06",
+            RpaGuiApp._should_set_reservation_requested_for_hotel_update(
                 {"adult_air_input": "390000"},
             )
         )
-        self.assertFalse(
-            RpaGuiApp._should_promote_pending_for_hotel_update(
-                "04",
-                {"adult_hotel_input": "434415"},
-            )
-        )
+
+    def test_mixed_progress_rows_require_all_non_closed_rows_to_be_requested(self):
+        mixed_rows = [
+            {"procCd": "06", "procNm": "대기예약"},
+            {"procCd": "04", "procNm": "예약신청"},
+            {"procCd": "07", "procNm": "예약가능"},
+            {"procCd": "05", "procNm": "예약마감"},
+        ]
+        requested_rows = [
+            {"procCd": "04", "procNm": "예약신청"},
+            {"procCd": "04", "procNm": "예약신청"},
+            {"procCd": "04", "procNm": "예약신청"},
+            {"procCd": "05", "procNm": "예약마감"},
+        ]
+
+        self.assertFalse(RpaGuiApp._all_non_closed_rows_have_progress_status(mixed_rows, "04"))
+        self.assertTrue(RpaGuiApp._all_non_closed_rows_have_progress_status(requested_rows, "04"))
 
     def test_sheet_pending_reservation_text_becomes_progress_status(self):
         class Var:

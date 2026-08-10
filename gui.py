@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.15"
+APP_VERSION = "v5.0.16"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -6822,11 +6822,18 @@ class RpaGuiApp:
         return total_count > 0 and reservation_closed_count >= total_count
 
     @staticmethod
-    def _should_promote_pending_for_hotel_update(progress_code, inputs_mapping):
-        return (
-            str(progress_code or '').strip() == '06'
-            and bool(inputs_mapping)
-            and 'adult_hotel_input' in inputs_mapping
+    def _should_set_reservation_requested_for_hotel_update(inputs_mapping):
+        return bool(inputs_mapping) and 'adult_hotel_input' in inputs_mapping
+
+    @staticmethod
+    def _all_non_closed_rows_have_progress_status(rows, target_code):
+        editable_rows = [
+            row for row in (rows or [])
+            if str(row.get('procCd') or '').strip() != '05'
+        ]
+        return bool(editable_rows) and all(
+            str(row.get('procCd') or '').strip() == str(target_code or '').strip()
+            for row in editable_rows
         )
 
     def _select_current_page_rows_by_progress_status(self, selectors, source_progress_code,
@@ -7631,9 +7638,8 @@ class RpaGuiApp:
                         key: value for key, value in inputs_mapping.items()
                         if str(value).strip() != ""
                     }
-                    promote_pending_for_hotel = self._should_promote_pending_for_hotel_update(
-                        progress_code,
-                        inputs_mapping,
+                    set_reservation_requested_for_hotel = (
+                        self._should_set_reservation_requested_for_hotel_update(inputs_mapping)
                     )
                     if not inputs_mapping and not progress_code:
                         print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 진행구분 변경값이 없습니다.")
@@ -7648,8 +7654,8 @@ class RpaGuiApp:
                     done_actions = []
                     if inputs_mapping:
                         done_actions.append("요금 업데이트")
-                    if promote_pending_for_hotel:
-                        done_actions.append("대기예약→예약신청")
+                    if set_reservation_requested_for_hotel:
+                        done_actions.append("수정 가능 행사→예약신청")
                     elif progress_code:
                         done_actions.append("진행구분 변경")
                     done_summary = " + ".join(done_actions) if done_actions else "작업"
@@ -7682,35 +7688,43 @@ class RpaGuiApp:
                                     actions = []
                                     if inputs_mapping:
                                         actions.append("요금 입력")
-                                    if promote_pending_for_hotel:
-                                        actions.append("대기예약→예약신청")
+                                    if set_reservation_requested_for_hotel:
+                                        actions.append("수정 가능 행사→예약신청")
                                     elif progress_code:
                                         actions.append(f"진행구분 {progress_label}")
                                     print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → {' + '.join(actions)} → 저장{suffix}")
 
-                                if promote_pending_for_hotel:
+                                if set_reservation_requested_for_hotel:
                                     current_rows = self._current_page_progress_rows()
                                     if not current_rows:
-                                        raise RuntimeError("대기예약 선변경 전 현재 ERP 그리드 행을 읽지 못했습니다.")
-                                    pending_count = sum(
-                                        1 for row in current_rows
-                                        if str(row.get('procCd') or '').strip() == '06'
-                                    )
-                                    if pending_count:
-                                        print(
-                                            f" -> 호텔비 수정 전 대기예약 {pending_count}건을 예약신청(04)으로 선변경합니다."
-                                        )
-                                        self._apply_current_page_progress_status(
-                                            selectors,
-                                            '04',
-                                            '예약신청',
-                                            driver_timeout,
-                                            erp_short_pause,
-                                            erp_poll_interval,
-                                            source_progress_code='06',
-                                        )
-                                        if target_page > 1:
-                                            self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                        raise RuntimeError("예약신청 선변경 전 현재 ERP 그리드 행을 읽지 못했습니다.")
+                                    progress_counts = self._current_page_progress_status_counts()
+                                    if not self._should_skip_price_update_for_all_closed(progress_counts):
+                                        if self._all_non_closed_rows_have_progress_status(current_rows, '04'):
+                                            print(" -> 호텔비 수정 대상 행사가 이미 예약신청(04) 상태입니다.")
+                                        else:
+                                            editable_count = len(current_rows) - int(
+                                                progress_counts.get('reservation_closed') or 0
+                                            )
+                                            print(
+                                                f" -> 호텔비 수정 전 예약마감 제외 {editable_count}건을 "
+                                                "예약신청(04)으로 선변경합니다."
+                                            )
+                                            self._apply_current_page_progress_status(
+                                                selectors,
+                                                '04',
+                                                '예약신청',
+                                                driver_timeout,
+                                                erp_short_pause,
+                                                erp_poll_interval,
+                                            )
+                                            if target_page > 1:
+                                                self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                            updated_rows = self._current_page_progress_rows()
+                                            if not self._all_non_closed_rows_have_progress_status(updated_rows, '04'):
+                                                raise RuntimeError(
+                                                    "호텔비 수정 전 예약신청 선변경 검증에 실패했습니다."
+                                                )
 
                                 if inputs_mapping:
                                     progress_counts = self._current_page_progress_status_counts()
@@ -7733,7 +7747,7 @@ class RpaGuiApp:
                                             selectors, wait, inputs_mapping, driver_timeout,
                                             erp_short_pause, erp_poll_interval
                                         )
-                                if progress_code and not promote_pending_for_hotel:
+                                if progress_code and not set_reservation_requested_for_hotel:
                                     if inputs_mapping:
                                         self.navigate_to_grid_page(selectors, target_page, driver_timeout)
                                     if self._current_page_progress_status_matches(progress_code, progress_label):
