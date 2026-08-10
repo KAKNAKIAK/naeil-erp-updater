@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.13",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.13/NaeilERPUpdater_Setup_v5.0.13.exe",
-    "sha256":  "EB46160BFB45BC70DEFF2CDDF63F3E926DFAB9E063F0F5CAE5CC2ED1528E302C",
+    "version":  "v5.0.14",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.14/NaeilERPUpdater_Setup_v5.0.14.exe",
+    "sha256":  "0D9F55227AF2D1BAA2091A0C04A81554FE121A30E67D5B26566F20745FD8F854",
     "notes":  [
-                  "입력표 요금 칸 더블클릭 시 수식뿐 아니라 숫자와 텍스트도 마지막 데이터 행까지 채울 수 있게 했습니다.",
-                  "값 전체 채우기는 확인창을 거친 뒤 적용되며, 기존 수식 칸은 선택한 값으로 대체됩니다.",
-                  "단일 실행 중 ERP 화면 조건을 발견했을 때 예/아니오/취소 선택지를 제공해 취소 시 실행하지 않고 입력표로 돌아가게 했습니다."
+                  "대기예약 행에 호텔비 수정 금액이 있으면 요금 수정 전에 예약신청으로 자동 변경합니다.",
+                  "호텔비 수정 후 해당 행의 최종 진행구분은 예약신청으로 유지됩니다.",
+                  "대기예약 행만 개별 선택해 상태를 변경하고, 예약마감 행의 기존 ERP 동작은 유지합니다."
               ]
 }

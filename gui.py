@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.13"
+APP_VERSION = "v5.0.14"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -308,6 +308,7 @@ class RpaGuiApp:
         self.custom_night_var = tk.StringVar(value='')
         self.airline_var = tk.StringVar(value=AIRLINE_EMPTY_LABEL)
         self.price_desc_var = tk.StringVar(value='')
+        self.departure_flight_var = tk.StringVar(value='')
         self.hotel_name_var = tk.StringVar(value='')
         self.progress_text_var = tk.StringVar(value='')
         self.airline_choices = []
@@ -325,6 +326,7 @@ class RpaGuiApp:
         self.current_hotel_seq_strict = False
         self.selected_airline_code = ''
         self.selected_price_desc = ''
+        self.selected_departure_flight = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
         self.selected_hotel_seq_strict = False
@@ -392,6 +394,7 @@ class RpaGuiApp:
             'search_date_end_input': '#searchEnDate',
             'airline_select': '#air2Cd',
             'price_desc_input': '#priceDesc',
+            'departure_flight_input': '#transFlight',
             'hotel_name_input': '#hotelKorNm',
             'hotel_seq_input': '#hotelSeq',
             'event_modify_button': '#eventModify',
@@ -1003,6 +1006,28 @@ class RpaGuiApp:
             font=('맑은 고딕', 9),
         )
         self.price_desc_entry.pack(side=tk.LEFT, ipady=3)
+        tk.Label(
+            search_filter_bar,
+            text='출발편',
+            font=('맑은 고딕', 9, 'bold'),
+            bg=self.card_color,
+            fg=self.fg_color,
+        ).pack(side=tk.LEFT, padx=(16, 6))
+        self.departure_flight_entry = tk.Entry(
+            search_filter_bar,
+            textvariable=self.departure_flight_var,
+            width=14,
+            bg=self.input_bg,
+            fg=self.fg_color,
+            insertbackground='white',
+            bd=0,
+            relief=tk.FLAT,
+            highlightbackground=self.border_color,
+            highlightcolor=self.accent_color,
+            highlightthickness=1,
+            font=('맑은 고딕', 9),
+        )
+        self.departure_flight_entry.pack(side=tk.LEFT, ipady=3)
         tk.Label(
             search_filter_bar,
             text='호텔명 검색',
@@ -3255,6 +3280,7 @@ class RpaGuiApp:
             'source_text': source_text,
             'airline_text': self.airline_var.get() if hasattr(self, 'airline_var') else AIRLINE_EMPTY_LABEL,
             'price_desc_text': self.price_desc_var.get() if hasattr(self, 'price_desc_var') else '',
+            'departure_flight_text': self.departure_flight_var.get() if hasattr(self, 'departure_flight_var') else '',
             'hotel_name_text': self.hotel_name_var.get() if hasattr(self, 'hotel_name_var') else '',
             'hotel_seq_text': getattr(self, 'current_hotel_seq', ''),
             'hotel_seq_strict': bool(getattr(self, 'current_hotel_seq_strict', False)),
@@ -3306,6 +3332,8 @@ class RpaGuiApp:
                 self.airline_var.set(snapshot.get('airline_text') or AIRLINE_EMPTY_LABEL)
             if hasattr(self, 'price_desc_var'):
                 self.price_desc_var.set(snapshot.get('price_desc_text') or '')
+            if hasattr(self, 'departure_flight_var'):
+                self.departure_flight_var.set(snapshot.get('departure_flight_text') or '')
             if hasattr(self, 'hotel_name_var'):
                 self.hotel_name_var.set(snapshot.get('hotel_name_text') or '')
             self.current_hotel_seq = snapshot.get('hotel_seq_text') or ''
@@ -3870,6 +3898,8 @@ class RpaGuiApp:
             self.airline_var.set(AIRLINE_EMPTY_LABEL)
         if hasattr(self, 'price_desc_var'):
             self.price_desc_var.set('')
+        if hasattr(self, 'departure_flight_var'):
+            self.departure_flight_var.set('')
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
         self.current_hotel_seq = ''
@@ -3878,6 +3908,7 @@ class RpaGuiApp:
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
+        self.selected_departure_flight = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
         self.selected_hotel_seq_strict = False
@@ -3933,10 +3964,11 @@ class RpaGuiApp:
     def _job_condition_text(self, job):
         price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
         airline = str(job.get('airline_code') or '').strip() or '전체 항공사'
+        departure_flight = str(job.get('departure_flight') or '').strip() or '전체 출발편'
         hotel_name = str(job.get('hotel_name') or '').strip()
         hotel_seq = str(job.get('hotel_seq') or '').strip()
         hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and hotel_seq)
-        parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}']
+        parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}', f'출발편 : {departure_flight}']
         if hotel_name:
             hotel_label = f'{hotel_name} (hotelSeq {hotel_seq})' if hotel_seq_strict else hotel_name
             parts.append(f'호텔명 : {hotel_label}')
@@ -3946,6 +3978,7 @@ class RpaGuiApp:
         rows = [dict(row) for row in (job.get('rows') or [])]
         price_desc = str(job.get('price_desc') or '').strip()
         airline_code = self._normalize_job_airline_code(job.get('airline_code'))
+        departure_flight = str(job.get('departure_flight') or '').strip()
         hotel_name = str(job.get('hotel_name') or '').strip()
         hotel_seq = str(job.get('hotel_seq') or '').strip()
         hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and hotel_seq)
@@ -3953,6 +3986,7 @@ class RpaGuiApp:
         for row in rows:
             row['price_desc'] = str(row.get('price_desc') or price_desc).strip()
             row['airline_code'] = self._normalize_job_airline_code(row.get('airline_code') or airline_code)
+            row['departure_flight'] = str(row.get('departure_flight') or departure_flight).strip()
             row['hotel_name'] = str(row.get('hotel_name') or hotel_name).strip()
             row['hotel_seq'] = str(row.get('hotel_seq') or hotel_seq).strip()
             row_seq_strict = row.get('hotel_seq_strict')
@@ -3971,6 +4005,7 @@ class RpaGuiApp:
         normalized_job = {
             'price_desc': price_desc,
             'airline_code': airline_code,
+            'departure_flight': departure_flight,
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
             'hotel_seq_strict': hotel_seq_strict,
@@ -4178,6 +4213,8 @@ class RpaGuiApp:
             self.airline_var.set(AIRLINE_EMPTY_LABEL)
         if hasattr(self, 'price_desc_var'):
             self.price_desc_var.set('')
+        if hasattr(self, 'departure_flight_var'):
+            self.departure_flight_var.set('')
         if hasattr(self, 'hotel_name_var'):
             self.hotel_name_var.set('')
         self.current_hotel_seq = ''
@@ -4186,6 +4223,7 @@ class RpaGuiApp:
             self.progress_text_var.set('')
         self.selected_airline_code = ''
         self.selected_price_desc = ''
+        self.selected_departure_flight = ''
         self.selected_hotel_name = ''
         self.selected_hotel_seq = ''
         self.selected_hotel_seq_strict = False
@@ -4215,16 +4253,18 @@ class RpaGuiApp:
             return
         airline_code = self._selected_airline_code()
         price_desc = self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else ''
+        departure_flight = self.departure_flight_var.get().strip() if hasattr(self, 'departure_flight_var') else ''
         hotel_name, hotel_seq, hotel_seq_strict = self._selected_hotel_filter_with_strict()
         progress_text = ''
-        if not any([price_desc, airline_code, hotel_name]):
-            messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분, 항공사코드, 호텔명 중 하나 이상 입력해 주세요.')
+        if not any([price_desc, airline_code, departure_flight, hotel_name]):
+            messagebox.showwarning('조건 필요', '작업 목록에 추가하려면 요금구분, 항공사코드, 출발편, 호텔명 중 하나 이상 입력해 주세요.')
             return
         rows_for_job = []
         for row in filtered:
             item = dict(row)
             item['price_desc'] = price_desc
             item['airline_code'] = airline_code
+            item['departure_flight'] = departure_flight
             item['hotel_name'] = hotel_name
             item['hotel_seq'] = hotel_seq
             item['hotel_seq_strict'] = hotel_seq_strict
@@ -4233,6 +4273,7 @@ class RpaGuiApp:
         new_job = self._normalize_job({
             'price_desc': price_desc,
             'airline_code': airline_code,
+            'departure_flight': departure_flight,
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
             'hotel_seq_strict': hotel_seq_strict,
@@ -4251,6 +4292,7 @@ class RpaGuiApp:
             f"아래 조건으로 작업 목록에 {confirm_action}할까요?\n\n"
             f"요금구분: {price_desc or '전체 요금구분'}\n"
             f"항공사: {airline_code or '전체 항공사'}\n"
+            f"출발편: {departure_flight or '전체 출발편'}\n"
             f"호텔명: {hotel_confirm_text}\n"
             f"대상 행: {len(rows_for_job)}건"
         )
@@ -4334,6 +4376,8 @@ class RpaGuiApp:
         self._clear_merge_restore_snapshot()
         self.sheet.set_sheet_data(grid, reset_col_positions=False, reset_row_positions=True)
         self.price_desc_var.set(str(job.get('price_desc') or ''))
+        if hasattr(self, 'departure_flight_var'):
+            self.departure_flight_var.set(str(job.get('departure_flight') or ''))
         self._select_airline_code(job.get('airline_code') or '', overwrite_blank_only=False)
         self.hotel_name_var.set(str(job.get('hotel_name') or ''))
         self.current_hotel_seq = str(job.get('hotel_seq') or '').strip()
@@ -5056,6 +5100,10 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
+            self.departure_flight_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
+        except Exception:
+            pass
+        try:
             self.hotel_name_entry.config(state=tk.DISABLED if locked else tk.NORMAL)
         except Exception:
             pass
@@ -5075,6 +5123,7 @@ class RpaGuiApp:
         hotel_name, hotel_seq, hotel_seq_strict = self._selected_hotel_filter_with_strict()
         return {
             'price_desc': self.price_desc_var.get().strip() if hasattr(self, 'price_desc_var') else '',
+            'departure_flight': self.departure_flight_var.get().strip() if hasattr(self, 'departure_flight_var') else '',
             'airline_code': self._selected_airline_code(),
             'hotel_name': hotel_name,
             'hotel_seq': hotel_seq,
@@ -5090,6 +5139,10 @@ class RpaGuiApp:
             price_desc = str(erp_conditions.get('price_desc') or '').strip()
             if price_desc:
                 pending['price_desc'] = price_desc
+        if not str(current_conditions.get('departure_flight') or '').strip():
+            departure_flight = str(erp_conditions.get('departure_flight') or '').strip()
+            if departure_flight:
+                pending['departure_flight'] = departure_flight
         if not str(current_conditions.get('airline_code') or '').strip():
             airline_code = str(erp_conditions.get('airline_code') or '').strip().upper()
             if airline_code:
@@ -5112,6 +5165,8 @@ class RpaGuiApp:
         ]
         if pending.get('price_desc'):
             lines.append(f"요금구분: {pending['price_desc']}")
+        if pending.get('departure_flight'):
+            lines.append(f"출발편: {pending['departure_flight']}")
         if pending.get('airline_code'):
             airline_text = pending.get('airline_text') or pending['airline_code']
             lines.append(f"항공사: {airline_text}")
@@ -5136,6 +5191,8 @@ class RpaGuiApp:
         pending = pending or {}
         if pending.get('price_desc') and hasattr(self, 'price_desc_var'):
             self.price_desc_var.set(str(pending.get('price_desc') or '').strip())
+        if pending.get('departure_flight') and hasattr(self, 'departure_flight_var'):
+            self.departure_flight_var.set(str(pending.get('departure_flight') or '').strip())
         if pending.get('airline_code'):
             self._select_airline_code(pending.get('airline_code'), overwrite_blank_only=False)
         if pending.get('hotel_name'):
@@ -5147,20 +5204,23 @@ class RpaGuiApp:
     def _read_erp_screen_conditions(self, selectors):
         selectors = selectors or {}
         price_selector = selectors.get('price_desc_input', '#priceDesc')
+        departure_flight_selector = selectors.get('departure_flight_input', '#transFlight')
         airline_selector = selectors.get('airline_select', '#air2Cd')
         hotel_name_selector = selectors.get('hotel_name_input', '#hotelKorNm')
         hotel_seq_selector = selectors.get('hotel_seq_input', '#hotelSeq')
         result = self.driver.execute_script(
             """
             const priceSelector = arguments[0];
-            const airlineSelector = arguments[1];
-            const hotelNameSelector = arguments[2];
-            const hotelSeqSelector = arguments[3];
+            const departureFlightSelector = arguments[1];
+            const airlineSelector = arguments[2];
+            const hotelNameSelector = arguments[3];
+            const hotelSeqSelector = arguments[4];
             const valueOf = (selector) => {
                 const el = document.querySelector(selector);
                 return el ? String(el.value || '').trim() : '';
             };
             const priceDesc = valueOf(priceSelector);
+            const departureFlight = valueOf(departureFlightSelector);
             const hotelName = valueOf(hotelNameSelector);
             const hotelSeq = valueOf(hotelSeqSelector);
             const airline = document.querySelector(airlineSelector);
@@ -5177,6 +5237,7 @@ class RpaGuiApp:
             }
             return {
                 price_desc: priceDesc,
+                departure_flight: departureFlight,
                 airline_code: airlineCode,
                 airline_text: airlineText,
                 hotel_name: hotelName,
@@ -5184,6 +5245,7 @@ class RpaGuiApp:
             };
             """,
             price_selector,
+            departure_flight_selector,
             airline_selector,
             hotel_name_selector,
             hotel_seq_selector,
@@ -5192,7 +5254,7 @@ class RpaGuiApp:
 
     def _try_import_erp_conditions_for_direct_run(self):
         current = self._current_direct_run_conditions()
-        if all(str(current.get(key) or '').strip() for key in ('price_desc', 'airline_code', 'hotel_name')):
+        if all(str(current.get(key) or '').strip() for key in ('price_desc', 'departure_flight', 'airline_code', 'hotel_name')):
             return current
 
         selectors = self.config.get('selectors', {})
@@ -5239,6 +5301,7 @@ class RpaGuiApp:
         return {
             'airline_code': value_for('airline_code', self.selected_airline_code).upper(),
             'price_desc': value_for('price_desc', self.selected_price_desc),
+            'departure_flight': value_for('departure_flight', self.selected_departure_flight),
             'hotel_name': value_for('hotel_name', self.selected_hotel_name),
             'hotel_seq': value_for('hotel_seq', self.selected_hotel_seq),
             'hotel_seq_strict': bool(
@@ -5286,6 +5349,7 @@ class RpaGuiApp:
             first_job = jobs[0]
             self.selected_airline_code = first_job.get('airline_code') or ''
             self.selected_price_desc = first_job.get('price_desc') or ''
+            self.selected_departure_flight = first_job.get('departure_flight') or ''
             self.selected_hotel_name = first_job.get('hotel_name') or ''
             self.selected_hotel_seq = first_job.get('hotel_seq') or ''
             self.selected_hotel_seq_strict = bool(self._bool_flag(first_job.get('hotel_seq_strict')) and self.selected_hotel_seq)
@@ -5315,6 +5379,7 @@ class RpaGuiApp:
                 return
             self.selected_airline_code = str(run_conditions.get('airline_code') or '').strip().upper()
             self.selected_price_desc = str(run_conditions.get('price_desc') or '').strip()
+            self.selected_departure_flight = str(run_conditions.get('departure_flight') or '').strip()
             self.selected_hotel_name = str(run_conditions.get('hotel_name') or '').strip()
             self.selected_hotel_seq = str(run_conditions.get('hotel_seq') or '').strip()
             self.selected_hotel_seq_strict = bool(self._bool_flag(run_conditions.get('hotel_seq_strict')) and self.selected_hotel_seq)
@@ -5322,12 +5387,14 @@ class RpaGuiApp:
             for row in self.fares_data:
                 row['price_desc'] = self.selected_price_desc
                 row['airline_code'] = self.selected_airline_code
+                row['departure_flight'] = self.selected_departure_flight
                 row['hotel_name'] = self.selected_hotel_name
                 row['hotel_seq'] = self.selected_hotel_seq
                 row['hotel_seq_strict'] = self.selected_hotel_seq_strict
             self.rpa_jobs_to_run = [{
                 'price_desc': self.selected_price_desc,
                 'airline_code': self.selected_airline_code,
+                'departure_flight': self.selected_departure_flight,
                 'hotel_name': self.selected_hotel_name,
                 'hotel_seq': self.selected_hotel_seq,
                 'hotel_seq_strict': self.selected_hotel_seq_strict,
@@ -6685,16 +6752,12 @@ class RpaGuiApp:
 
     @staticmethod
     def _progress_status_from_text(text):
-        normalized = re.sub(r"\s+", "", str(text or ""))
-        if "예약마감" in normalized:
-            return "05", "예약마감"
-        return "", ""
+        return excel_loader.progress_status_from_text(text)
 
-    def _current_page_progress_status_matches(self, progress_code, progress_label):
-        """현재 페이지의 진행구분이 이미 목표값이면 중복 정보일괄수정을 피한다."""
+    def _current_page_progress_rows(self):
         grid_id = self.config.get('grid_id', '#gridMain')
         try:
-            rows = self.driver.execute_script(
+            return self.driver.execute_script(
                 """
                 try {
                     return (typeof AUIGrid !== 'undefined') ? AUIGrid.getGridData(arguments[0]) : [];
@@ -6705,7 +6768,11 @@ class RpaGuiApp:
                 grid_id,
             ) or []
         except Exception:
-            return False
+            return []
+
+    def _current_page_progress_status_matches(self, progress_code, progress_label):
+        """현재 페이지의 진행구분이 이미 목표값이면 중복 정보일괄수정을 피한다."""
+        rows = self._current_page_progress_rows()
         if not rows:
             return False
         target_label = re.sub(r"\s+", "", str(progress_label or ""))
@@ -6724,20 +6791,7 @@ class RpaGuiApp:
         return True
 
     def _current_page_progress_status_counts(self):
-        grid_id = self.config.get('grid_id', '#gridMain')
-        try:
-            rows = self.driver.execute_script(
-                """
-                try {
-                    return (typeof AUIGrid !== 'undefined') ? AUIGrid.getGridData(arguments[0]) : [];
-                } catch(e) {
-                    return [];
-                }
-                """,
-                grid_id,
-            ) or []
-        except Exception:
-            rows = []
+        rows = self._current_page_progress_rows()
 
         counts = {}
         reservation_closed = 0
@@ -6764,18 +6818,107 @@ class RpaGuiApp:
         reservation_closed_count = int((progress_counts or {}).get("reservation_closed") or 0)
         return total_count > 0 and reservation_closed_count >= total_count
 
+    @staticmethod
+    def _should_promote_pending_for_hotel_update(progress_code, inputs_mapping):
+        return (
+            str(progress_code or '').strip() == '06'
+            and bool(inputs_mapping)
+            and 'adult_hotel_input' in inputs_mapping
+        )
+
+    def _select_current_page_rows_by_progress_status(self, selectors, source_progress_code,
+                                                      erp_short_pause, erp_poll_interval):
+        """현재 페이지에서 source 진행구분 행만 선택한다."""
+        rows = self._current_page_progress_rows()
+        target_indexes = [
+            index for index, row in enumerate(rows)
+            if str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
+        ]
+        if not target_indexes:
+            return 0
+
+        row_checkbox_selector = selectors.get(
+            'row_checkbox',
+            'td.aui-grid-row-check-column input',
+        )
+        result = self.driver.execute_script(
+            """
+            const selector = arguments[0];
+            const targetIndexes = arguments[1] || [];
+            const checkboxes = Array.from(document.querySelectorAll(selector));
+            if (!checkboxes.length) {
+                return {ok: false, reason: 'row_checkbox_not_found', targetIndexes};
+            }
+
+            // 이전 작업에서 남은 선택값을 먼저 비운다. disabled 행은 ERP가 관리하므로 건드리지 않는다.
+            checkboxes.forEach((checkbox) => {
+                if (!checkbox.disabled && checkbox.checked) {
+                    checkbox.click();
+                }
+            });
+
+            const selected = [];
+            for (const index of targetIndexes) {
+                const checkbox = checkboxes.find((item) => String(item.value) === String(index)) || checkboxes[index];
+                if (!checkbox || checkbox.disabled) {
+                    return {ok: false, reason: 'target_row_not_selectable', index, targetIndexes};
+                }
+                if (!checkbox.checked) {
+                    checkbox.click();
+                }
+                if (!checkbox.checked) {
+                    return {ok: false, reason: 'target_row_not_checked', index, targetIndexes};
+                }
+                selected.push(index);
+            }
+            return {ok: true, selected, available: checkboxes.length};
+            """,
+            row_checkbox_selector,
+            target_indexes,
+        ) or {}
+        if not result.get('ok'):
+            raise RuntimeError(
+                f"대기예약 행 선택 실패: {result.get('reason') or 'unknown'}"
+            )
+
+        expected_count = len(target_indexes)
+        wait = WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval)
+        wait.until(
+            lambda d: int(d.execute_script(
+                """
+                return Array.from(document.querySelectorAll(arguments[0]))
+                    .filter((checkbox) => checkbox.checked).length;
+                """,
+                row_checkbox_selector,
+            ) or 0) == expected_count
+        )
+        time.sleep(erp_short_pause)
+        return expected_count
+
     def _apply_current_page_progress_status(self, selectors, progress_code, progress_label,
-                                            driver_timeout, erp_short_pause, erp_poll_interval):
+                                            driver_timeout, erp_short_pause, erp_poll_interval,
+                                            source_progress_code=None):
         """현재 조회/페이지의 선택 행에 정보일괄수정 진행구분을 적용한다."""
-        header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
-        if not header_chk.is_selected():
-            self.driver.execute_script("arguments[0].click();", header_chk)
-            try:
-                WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
-                    lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
-                )
-            except Exception:
-                time.sleep(erp_short_pause)
+        selected_count = None
+        if source_progress_code is not None:
+            selected_count = self._select_current_page_rows_by_progress_status(
+                selectors,
+                source_progress_code,
+                erp_short_pause,
+                erp_poll_interval,
+            )
+            if not selected_count:
+                return 0
+        else:
+            header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
+            if not header_chk.is_selected():
+                self.driver.execute_script("arguments[0].click();", header_chk)
+                try:
+                    WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
+                        lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
+                    )
+                except Exception:
+                    time.sleep(erp_short_pause)
 
         event_modify_selector = selectors.get("event_modify_button", "#eventModify")
         event_modify_btn = self.driver.find_element(By.CSS_SELECTOR, event_modify_selector)
@@ -6846,6 +6989,16 @@ class RpaGuiApp:
 
         wait.until(lambda d: not d.find_elements(By.CSS_SELECTOR, proc_select_selector))
         self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+        if source_progress_code is not None:
+            remaining_source_rows = sum(
+                1 for row in self._current_page_progress_rows()
+                if str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
+            )
+            if remaining_source_rows:
+                raise RuntimeError(
+                    f"대상 진행구분 변경 후에도 원래 상태 행이 {remaining_source_rows}건 남아 있습니다."
+                )
+        return selected_count
 
     def find_and_switch_frame(self, selector):
         by, search_val = self._selector_locator(selector)
@@ -7282,6 +7435,7 @@ class RpaGuiApp:
                 row_conditions = self._rpa_row_conditions(row)
                 airline_code = row_conditions['airline_code']
                 price_desc = row_conditions['price_desc']
+                departure_flight = row_conditions['departure_flight']
                 hotel_name = row_conditions['hotel_name']
                 hotel_seq = row_conditions['hotel_seq']
                 hotel_seq_strict = bool(row_conditions['hotel_seq_strict'])
@@ -7335,6 +7489,18 @@ class RpaGuiApp:
                         print(f" -> 요금구분 필터 설정: {price_desc_result.get('value') or price_desc}")
                     elif index == 0:
                         print(" -> 요금구분 필터 초기화: 전체 요금구분 대상")
+
+                    departure_flight_result = self._set_erp_text_filter(
+                        selectors,
+                        'departure_flight_input',
+                        '#transFlight',
+                        departure_flight,
+                        '출발편',
+                    )
+                    if departure_flight:
+                        print(f" -> 출발편 필터 설정: {departure_flight_result.get('value') or departure_flight}")
+                    elif index == 0:
+                        print(" -> 출발편 필터 초기화: 전체 출발편 대상")
 
                     hotel_result = self._set_erp_hotel_filter(
                         selectors,
@@ -7462,8 +7628,12 @@ class RpaGuiApp:
                         key: value for key, value in inputs_mapping.items()
                         if str(value).strip() != ""
                     }
+                    promote_pending_for_hotel = self._should_promote_pending_for_hotel_update(
+                        progress_code,
+                        inputs_mapping,
+                    )
                     if not inputs_mapping and not progress_code:
-                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 예약마감 변경값이 없습니다.")
+                        print(f" -> [건너뜀] {date_log_str}에 입력할 요금값 또는 진행구분 변경값이 없습니다.")
                         rpa_history.append({"date": history_date_str, "status": "SKIP", "error": "입력/변경값 없음"})
                         self._set_job_progress_ui(job_index, result_status='SKIP')
                         self.update_progress_ui(index + 1, total_items)
@@ -7475,7 +7645,9 @@ class RpaGuiApp:
                     done_actions = []
                     if inputs_mapping:
                         done_actions.append("요금 업데이트")
-                    if progress_code:
+                    if promote_pending_for_hotel:
+                        done_actions.append("대기예약→예약신청")
+                    elif progress_code:
                         done_actions.append("진행구분 변경")
                     done_summary = " + ".join(done_actions) if done_actions else "작업"
 
@@ -7507,9 +7679,35 @@ class RpaGuiApp:
                                     actions = []
                                     if inputs_mapping:
                                         actions.append("요금 입력")
-                                    if progress_code:
+                                    if promote_pending_for_hotel:
+                                        actions.append("대기예약→예약신청")
+                                    elif progress_code:
                                         actions.append(f"진행구분 {progress_label}")
                                     print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → {' + '.join(actions)} → 저장{suffix}")
+
+                                if promote_pending_for_hotel:
+                                    current_rows = self._current_page_progress_rows()
+                                    if not current_rows:
+                                        raise RuntimeError("대기예약 선변경 전 현재 ERP 그리드 행을 읽지 못했습니다.")
+                                    pending_count = sum(
+                                        1 for row in current_rows
+                                        if str(row.get('procCd') or '').strip() == '06'
+                                    )
+                                    if pending_count:
+                                        print(
+                                            f" -> 호텔비 수정 전 대기예약 {pending_count}건을 예약신청(04)으로 선변경합니다."
+                                        )
+                                        self._apply_current_page_progress_status(
+                                            selectors,
+                                            '04',
+                                            '예약신청',
+                                            driver_timeout,
+                                            erp_short_pause,
+                                            erp_poll_interval,
+                                            source_progress_code='06',
+                                        )
+                                        if target_page > 1:
+                                            self.navigate_to_grid_page(selectors, target_page, driver_timeout)
 
                                 if inputs_mapping:
                                     progress_counts = self._current_page_progress_status_counts()
@@ -7532,7 +7730,7 @@ class RpaGuiApp:
                                             selectors, wait, inputs_mapping, driver_timeout,
                                             erp_short_pause, erp_poll_interval
                                         )
-                                if progress_code:
+                                if progress_code and not promote_pending_for_hotel:
                                     if inputs_mapping:
                                         self.navigate_to_grid_page(selectors, target_page, driver_timeout)
                                     if self._current_page_progress_status_matches(progress_code, progress_label):

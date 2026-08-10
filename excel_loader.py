@@ -87,8 +87,24 @@ def _cell_text(row, col_idx):
     return str(value).strip()
 
 
-def _has_reservation_closed_text(value):
-    return "예약마감" in re.sub(r"\s+", "", str(value or ""))
+PROGRESS_STATUS_CODES = {
+    "대기예약": "06",
+    "예약신청": "04",
+    "예약마감": "05",
+}
+
+
+def progress_status_from_text(value):
+    """입력표/엑셀 진행구분 문구를 ERP 진행구분 코드로 변환한다."""
+    normalized = re.sub(r"\s+", "", str(value or ""))
+    for label, code in PROGRESS_STATUS_CODES.items():
+        if label in normalized:
+            return code, label
+    return "", ""
+
+
+def _has_progress_status_text(value):
+    return bool(progress_status_from_text(value)[0])
 
 
 def _parse_fare_value(val, label, row_no, errors):
@@ -97,7 +113,7 @@ def _parse_fare_value(val, label, row_no, errors):
     text = str(val).strip()
     if not text:
         return 0
-    if _has_reservation_closed_text(text):
+    if _has_progress_status_text(text):
         return ""
     try:
         parsed = int(float(text.replace(",", "")))
@@ -113,10 +129,10 @@ def _parse_fare_value(val, label, row_no, errors):
 def load_fare_jobs_from_excel(file_path, history_log_path=None):
     """조건열이 있는 엑셀을 작업 큐용 그룹으로 읽는다.
 
-    조건열 감지 기준: 요금구분 + 항공사코드 열이 모두 있어야 한다.
+    조건열 감지 기준: 요금구분 + 항공사코드 열이 모두 있어야 한다. 출발편/호텔명/진행구분은 선택 조건열이다.
     반환값: {
         detected: bool,
-        jobs: [{price_desc, airline_code, hotel_name, rows, source}],
+        jobs: [{price_desc, airline_code, departure_flight, hotel_name, rows, source}],
         is_period: bool,
         errors: [str]
     }
@@ -138,13 +154,14 @@ def load_fare_jobs_from_excel(file_path, history_log_path=None):
     headers = [str(c).strip() for c in df.columns]
     price_col = _find_column(headers, ["요금구분", "가격구분", "price_desc", "pricedesc", "price description"])
     airline_col = _find_column(headers, ["항공사코드", "항공사", "airline", "airline_code", "airlinecode", "air2cd"])
+    departure_flight_col = _find_column(headers, ["출발편", "출발편명", "출발항공편", "편명", "departure_flight", "departureflight", "trans_flight", "transflight", "transFlight", "flight"])
     hotel_col = _find_column(headers, ["호텔명", "호텔", "hotel_name", "hotelname", "hotel_kor_nm", "hotelkornm", "hotelKorNm"])
     progress_col = _find_column(headers, ["진행구분", "진행상태", "progress", "progress_status", "proccd"])
     if price_col is None or airline_col is None:
         return result
 
     result["detected"] = True
-    condition_cols = {idx for idx in (price_col, airline_col, hotel_col, progress_col) if idx is not None}
+    condition_cols = {idx for idx in (price_col, airline_col, departure_flight_col, hotel_col, progress_col) if idx is not None}
 
     start_col = _find_column(headers, ["시작일", "날짜", "출발일", "출발일자", "start", "start_date", "startdate", "date"])
     end_col = _find_column(headers, ["종료일", "종료날짜", "종료", "end", "end_date", "enddate"])
@@ -212,6 +229,7 @@ def load_fare_jobs_from_excel(file_path, history_log_path=None):
         row_no = idx + 2
         price_desc = _cell_text(row, price_col)
         airline_code = _cell_text(row, airline_col).upper()
+        departure_flight = _cell_text(row, departure_flight_col)
         hotel_name = _cell_text(row, hotel_col)
         progress_text = _cell_text(row, progress_col)
         if not price_desc or not airline_code:
@@ -235,11 +253,11 @@ def load_fare_jobs_from_excel(file_path, history_log_path=None):
             for field, col, _label in fare_cols
         ]
         progress_status_field = next(
-            (field for field, value in raw_fare_values if _has_reservation_closed_text(value)),
+            (field for field, value in raw_fare_values if _has_progress_status_text(value)),
             "",
         )
         if not progress_text:
-            progress_text = next((str(v).strip() for _field, v in raw_fare_values if _has_reservation_closed_text(v)), "")
+            progress_text = next((str(v).strip() for _field, v in raw_fare_values if _has_progress_status_text(v)), "")
 
         parsed_values = [
             _parse_fare_value(row.iloc[col] if col is not None else "", label, row_no, result["errors"])
@@ -258,15 +276,17 @@ def load_fare_jobs_from_excel(file_path, history_log_path=None):
             "infant_fare": parsed_values[6],
             "price_desc": price_desc,
             "airline_code": airline_code,
+            "departure_flight": departure_flight,
             "hotel_name": hotel_name,
             "progress_status": progress_text,
             "progress_status_field": progress_status_field,
         }
-        key = (price_desc, airline_code, hotel_name)
+        key = (price_desc, airline_code, departure_flight, hotel_name)
         if key not in jobs_by_key:
             jobs_by_key[key] = {
                 "price_desc": price_desc,
                 "airline_code": airline_code,
+                "departure_flight": departure_flight,
                 "hotel_name": hotel_name,
                 "progress_text": "",
                 "rows": [],

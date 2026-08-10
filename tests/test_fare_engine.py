@@ -192,6 +192,61 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(rows[0]["adult_air"], "")
         self.assertEqual(app._progress_status_from_text(rows[0]["progress_status"]), ("05", "예약마감"))
 
+    def test_progress_status_text_maps_all_supported_erp_codes(self):
+        self.assertEqual(RpaGuiApp._progress_status_from_text("대기예약"), ("06", "대기예약"))
+        self.assertEqual(RpaGuiApp._progress_status_from_text("예약 신청"), ("04", "예약신청"))
+        self.assertEqual(RpaGuiApp._progress_status_from_text("예약 마감"), ("05", "예약마감"))
+
+    def test_hotel_update_promotes_pending_reservation_before_price_update(self):
+        self.assertTrue(
+            RpaGuiApp._should_promote_pending_for_hotel_update(
+                "06",
+                {"adult_hotel_input": "434415"},
+            )
+        )
+        self.assertTrue(
+            RpaGuiApp._should_promote_pending_for_hotel_update(
+                "06",
+                {"adult_hotel_input": "0"},
+            )
+        )
+        self.assertFalse(
+            RpaGuiApp._should_promote_pending_for_hotel_update(
+                "06",
+                {"adult_air_input": "390000"},
+            )
+        )
+        self.assertFalse(
+            RpaGuiApp._should_promote_pending_for_hotel_update(
+                "04",
+                {"adult_hotel_input": "434415"},
+            )
+        )
+
+    def test_sheet_pending_reservation_text_becomes_progress_status(self):
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Sheet:
+            def get_sheet_data(self):
+                return [["2026-07-15", "대기예약", "", "", "", "", "", ""]]
+
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.period_mode_var = Var(False)
+        app.sheet = Sheet()
+
+        rows, errors = app.read_sheet_data()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(rows[0]["progress_status"], "대기예약")
+        self.assertEqual(rows[0]["progress_status_field"], "adult_air")
+        self.assertEqual(rows[0]["adult_air"], "")
+        self.assertEqual(app._progress_status_from_text(rows[0]["progress_status"]), ("06", "대기예약"))
+
     def test_load_job_to_sheet_restores_reservation_closed_cell_text(self):
         class Var:
             def __init__(self, value=""):
@@ -292,6 +347,7 @@ class FareEngineTest(unittest.TestCase):
                 return [
                     {"procCd": "05", "procNm": "예약마감"},
                     {"procCd": "04", "procNm": "예약신청"},
+                    {"procCd": "06", "procNm": "대기예약"},
                     {"procCd": "", "procNm": "예약 마감"},
                 ]
 
@@ -301,7 +357,7 @@ class FareEngineTest(unittest.TestCase):
 
         summary = app._current_page_progress_status_counts()
 
-        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["total"], 4)
         self.assertEqual(summary["reservation_closed"], 2)
         self.assertEqual(summary["counts"]["05|예약마감"], 1)
         self.assertFalse(RpaGuiApp._should_skip_price_update_for_all_closed(summary))
@@ -330,6 +386,7 @@ class FareEngineTest(unittest.TestCase):
         job = app._normalize_job({
             "price_desc": "3박_다낭",
             "airline_code": "진에어",
+            "departure_flight": "LJ091",
             "hotel_name": "멜리아 빈펄 다낭",
             "progress_text": "예약마감",
             "rows": [{"date": "2026-07-15", "date_end": "2026-07-15"}],
@@ -337,9 +394,10 @@ class FareEngineTest(unittest.TestCase):
         })
 
         self.assertEqual(job["airline_code"], "LJ")
+        self.assertEqual(job["departure_flight"], "LJ091")
         self.assertEqual(job["hotel_name"], "멜리아 빈펄 다낭")
         self.assertEqual(job["rows"][0]["airline_code"], "LJ")
-        self.assertIn("요금구분 : 3박_다낭 / 항공사 : LJ / 호텔명 : 멜리아 빈펄 다낭", job["rows"][0]["_job_label"])
+        self.assertIn("요금구분 : 3박_다낭 / 항공사 : LJ / 출발편 : LJ091 / 호텔명 : 멜리아 빈펄 다낭", job["rows"][0]["_job_label"])
         self.assertNotIn("진행구분", job["rows"][0]["_job_label"])
 
     def test_hotel_db_selection_keeps_hotel_seq_in_job(self):
@@ -554,6 +612,7 @@ class FareEngineTest(unittest.TestCase):
         app.config = {"selectors": {"search_date_input": "#searchStDate"}}
         app.driver = None
         app.price_desc_var = Var("")
+        app.departure_flight_var = Var("")
         app.airline_var = Var(AIRLINE_EMPTY_LABEL)
         app.hotel_name_var = Var("")
         app.current_hotel_seq = ""
@@ -566,6 +625,7 @@ class FareEngineTest(unittest.TestCase):
         app.find_and_switch_frame = lambda *_args, **_kwargs: True
         app._read_erp_screen_conditions = lambda _selectors: {
             "price_desc": "2N3D_TYO_LCC_ICN",
+            "departure_flight": "LJ091",
             "airline_code": "LJ",
             "airline_text": "[LJ] 진에어",
             "hotel_name": "아미아나 나트랑",
@@ -577,15 +637,18 @@ class FareEngineTest(unittest.TestCase):
 
         self.assertTrue(driver.quit_called)
         self.assertEqual(conditions["price_desc"], "2N3D_TYO_LCC_ICN")
+        self.assertEqual(conditions["departure_flight"], "LJ091")
         self.assertEqual(conditions["airline_code"], "LJ")
         self.assertEqual(conditions["hotel_name"], "아미아나 나트랑")
         self.assertEqual(conditions["hotel_seq"], "7864")
         self.assertFalse(conditions["hotel_seq_strict"])
         self.assertEqual(app.price_desc_var.get(), "2N3D_TYO_LCC_ICN")
+        self.assertEqual(app.departure_flight_var.get(), "LJ091")
         self.assertEqual(app._selected_airline_code(), "LJ")
         self.assertEqual(app._selected_hotel_filter(), ("아미아나 나트랑", "7864"))
         confirm_msg = askyesnocancel.call_args.args[1]
         self.assertIn("요금구분: 2N3D_TYO_LCC_ICN", confirm_msg)
+        self.assertIn("출발편: LJ091", confirm_msg)
         self.assertIn("항공사: [LJ] 진에어", confirm_msg)
         self.assertIn("호텔명: 아미아나 나트랑 (hotelSeq 7864)", confirm_msg)
         self.assertIn("취소: 실행하지 않고 입력표로 돌아가기", confirm_msg)
@@ -612,6 +675,7 @@ class FareEngineTest(unittest.TestCase):
         app.config = {"selectors": {"search_date_input": "#searchStDate"}}
         app.driver = None
         app.price_desc_var = Var("")
+        app.departure_flight_var = Var("")
         app.airline_var = Var(AIRLINE_EMPTY_LABEL)
         app.hotel_name_var = Var("")
         app.current_hotel_seq = ""
@@ -624,6 +688,7 @@ class FareEngineTest(unittest.TestCase):
         app.find_and_switch_frame = lambda *_args, **_kwargs: True
         app._read_erp_screen_conditions = lambda _selectors: {
             "price_desc": "ERP_요금",
+            "departure_flight": "ZE581",
             "airline_code": "LJ",
             "airline_text": "[LJ] 진에어",
             "hotel_name": "",
@@ -636,17 +701,20 @@ class FareEngineTest(unittest.TestCase):
         self.assertTrue(driver.quit_called)
         self.assertIsNone(conditions)
         self.assertEqual(app.price_desc_var.get(), "")
+        self.assertEqual(app.departure_flight_var.get(), "")
         self.assertEqual(app._selected_airline_code(), "")
 
     def test_erp_condition_import_keeps_existing_program_conditions(self):
         current = {
             "price_desc": "프로그램_요금",
+            "departure_flight": "",
             "airline_code": "KE",
             "hotel_name": "",
             "hotel_seq": "",
         }
         erp = {
             "price_desc": "ERP_요금",
+            "departure_flight": "ZE581",
             "airline_code": "LJ",
             "airline_text": "[LJ] 진에어",
             "hotel_name": "아미아나 나트랑",
@@ -655,12 +723,13 @@ class FareEngineTest(unittest.TestCase):
 
         pending = RpaGuiApp._pending_erp_condition_imports(current, erp)
 
-        self.assertEqual(pending, {"hotel_name": "아미아나 나트랑", "hotel_seq": "7864", "hotel_seq_strict": False})
+        self.assertEqual(pending, {"departure_flight": "ZE581", "hotel_name": "아미아나 나트랑", "hotel_seq": "7864", "hotel_seq_strict": False})
 
     def test_job_queue_row_conditions_do_not_fallback_to_first_job_hotel_seq(self):
         app = RpaGuiApp.__new__(RpaGuiApp)
         app.selected_price_desc = "김괌"
         app.selected_airline_code = ""
+        app.selected_departure_flight = "LJ091"
         app.selected_hotel_name = "괌 플라자 호텔"
         app.selected_hotel_seq = "6195"
         app.selected_hotel_seq_strict = True
@@ -670,6 +739,7 @@ class FareEngineTest(unittest.TestCase):
             "_job_index": 2,
             "price_desc": "김괌",
             "airline_code": "",
+            "departure_flight": "LJ092",
             "hotel_name": "괌 니코 호텔",
             "hotel_seq": "",
             "hotel_seq_strict": False,
@@ -678,6 +748,7 @@ class FareEngineTest(unittest.TestCase):
         direct_row = {
             "price_desc": "",
             "airline_code": "",
+            "departure_flight": "",
             "hotel_name": "",
             "hotel_seq": "",
             "hotel_seq_strict": "",
@@ -691,6 +762,8 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(job_conditions["hotel_seq"], "")
         self.assertFalse(job_conditions["hotel_seq_strict"])
         self.assertEqual(job_conditions["price_desc"], "김괌")
+        self.assertEqual(job_conditions["departure_flight"], "LJ092")
+        self.assertEqual(direct_conditions["departure_flight"], "LJ091")
         self.assertEqual(direct_conditions["hotel_name"], "괌 플라자 호텔")
         self.assertEqual(direct_conditions["hotel_seq"], "6195")
         self.assertTrue(direct_conditions["hotel_seq_strict"])

@@ -20,6 +20,7 @@ class ExcelJobImportTest(unittest.TestCase):
             {
                 "요금구분": "3박_다낭",
                 "항공사코드": "LJ",
+                "출발편": "LJ091",
                 "호텔명": "멜리아 빈펄 다낭",
                 "진행구분": "예약마감",
                 "시작일": "2026-07-15",
@@ -29,6 +30,7 @@ class ExcelJobImportTest(unittest.TestCase):
             {
                 "요금구분": "3박_다낭",
                 "항공사코드": "LJ",
+                "출발편": "LJ091",
                 "호텔명": "멜리아 빈펄 다낭",
                 "진행구분": "예약마감",
                 "시작일": "2026-07-16",
@@ -38,6 +40,7 @@ class ExcelJobImportTest(unittest.TestCase):
             {
                 "요금구분": "3박_나트랑",
                 "항공사코드": "7C",
+                "출발편": "7C2901",
                 "호텔명": "아미아나 리조트 나트랑",
                 "진행구분": "예약마감",
                 "시작일": "2026-07-17",
@@ -53,11 +56,14 @@ class ExcelJobImportTest(unittest.TestCase):
         self.assertEqual(len(result["jobs"]), 2)
         self.assertEqual(result["jobs"][0]["price_desc"], "3박_다낭")
         self.assertEqual(result["jobs"][0]["airline_code"], "LJ")
+        self.assertEqual(result["jobs"][0]["departure_flight"], "LJ091")
         self.assertEqual(result["jobs"][0]["hotel_name"], "멜리아 빈펄 다낭")
         self.assertEqual(len(result["jobs"][0]["rows"]), 2)
         self.assertEqual(result["jobs"][1]["price_desc"], "3박_나트랑")
+        self.assertEqual(result["jobs"][1]["departure_flight"], "7C2901")
         self.assertEqual(result["jobs"][1]["hotel_name"], "아미아나 리조트 나트랑")
         self.assertEqual(result["jobs"][1]["rows"][0]["adult_air"], 410000)
+        self.assertEqual(result["jobs"][1]["rows"][0]["departure_flight"], "7C2901")
         self.assertEqual(result["jobs"][1]["rows"][0]["hotel_name"], "아미아나 리조트 나트랑")
 
     def test_reservation_closed_fare_cell_keeps_source_field(self):
@@ -74,6 +80,23 @@ class ExcelJobImportTest(unittest.TestCase):
 
         row = result["jobs"][0]["rows"][0]
         self.assertEqual(row["progress_status"], "예약마감")
+        self.assertEqual(row["progress_status_field"], "adult_air")
+        self.assertEqual(row["adult_air"], "")
+
+    def test_pending_reservation_fare_cell_keeps_source_field(self):
+        path = self._write_excel([
+            {
+                "요금구분": "괌_저녁_3박",
+                "항공사코드": "LJ",
+                "시작일": "2026-07-15",
+                "항공비": "대기예약",
+            },
+        ])
+
+        result = excel_loader.load_fare_jobs_from_excel(path)
+
+        row = result["jobs"][0]["rows"][0]
+        self.assertEqual(row["progress_status"], "대기예약")
         self.assertEqual(row["progress_status_field"], "adult_air")
         self.assertEqual(row["adult_air"], "")
 
