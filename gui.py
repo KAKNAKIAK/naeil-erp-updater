@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.14"
+APP_VERSION = "v5.0.15"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -4895,6 +4895,9 @@ class RpaGuiApp:
                 ((field, cell) for field, cell in fare_text_cells if self._progress_status_from_text(cell)[0]),
                 ("", ""),
             )
+            _progress_code, canonical_progress_label = self._progress_status_from_text(progress_status_text)
+            if canonical_progress_label:
+                progress_status_text = canonical_progress_label
 
             line = i + 1
             norm_date = normalize_date(date_cell)

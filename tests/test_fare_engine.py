@@ -193,7 +193,9 @@ class FareEngineTest(unittest.TestCase):
         self.assertEqual(app._progress_status_from_text(rows[0]["progress_status"]), ("05", "예약마감"))
 
     def test_progress_status_text_maps_all_supported_erp_codes(self):
-        self.assertEqual(RpaGuiApp._progress_status_from_text("대기예약"), ("06", "대기예약"))
+        for text in ("대기 예약", "예약 대기", "대기예약", "예약대기"):
+            with self.subTest(text=text):
+                self.assertEqual(RpaGuiApp._progress_status_from_text(text), ("06", "대기예약"))
         self.assertEqual(RpaGuiApp._progress_status_from_text("예약 신청"), ("04", "예약신청"))
         self.assertEqual(RpaGuiApp._progress_status_from_text("예약 마감"), ("05", "예약마감"))
 
@@ -233,7 +235,7 @@ class FareEngineTest(unittest.TestCase):
 
         class Sheet:
             def get_sheet_data(self):
-                return [["2026-07-15", "대기예약", "", "", "", "", "", ""]]
+                return [["2026-07-15", "예약 대기", "", "", "", "", "", ""]]
 
         app = RpaGuiApp.__new__(RpaGuiApp)
         app.period_mode_var = Var(False)

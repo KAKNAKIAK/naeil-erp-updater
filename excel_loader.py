@@ -93,12 +93,19 @@ PROGRESS_STATUS_CODES = {
     "예약마감": "05",
 }
 
+PROGRESS_STATUS_ALIASES = {
+    "대기예약": ("대기예약", "예약대기"),
+    "예약신청": ("예약신청",),
+    "예약마감": ("예약마감",),
+}
+
 
 def progress_status_from_text(value):
     """입력표/엑셀 진행구분 문구를 ERP 진행구분 코드로 변환한다."""
     normalized = re.sub(r"\s+", "", str(value or ""))
     for label, code in PROGRESS_STATUS_CODES.items():
-        if label in normalized:
+        aliases = PROGRESS_STATUS_ALIASES.get(label, (label,))
+        if any(alias in normalized for alias in aliases):
             return code, label
     return "", ""
 
@@ -258,6 +265,9 @@ def load_fare_jobs_from_excel(file_path, history_log_path=None):
         )
         if not progress_text:
             progress_text = next((str(v).strip() for _field, v in raw_fare_values if _has_progress_status_text(v)), "")
+        _progress_code, canonical_progress_label = progress_status_from_text(progress_text)
+        if canonical_progress_label:
+            progress_text = canonical_progress_label
 
         parsed_values = [
             _parse_fare_value(row.iloc[col] if col is not None else "", label, row_no, result["errors"])
