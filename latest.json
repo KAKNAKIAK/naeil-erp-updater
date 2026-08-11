@@ -1,10 +1,9 @@
 {
-    "version":  "v5.0.16",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.16/NaeilERPUpdater_Setup_v5.0.16.exe",
-    "sha256":  "CEB9F006ADE64CFCF428EE51B3A75852F096813C9B30D623C3A0FEF4F107DCDC",
+    "version":  "v5.0.17",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.17/NaeilERPUpdater_Setup_v5.0.17.exe",
+    "sha256":  "2C0394055CDB2012A2B1C923084D317078ECD96657720F8649D61CAAAF476A85",
     "notes":  [
-                  "호텔비를 수정하기 전에 ERP에서 수정 가능한 행을 모두 예약신청으로 변경합니다.",
-                  "기존 예약신청은 유지하고 예약마감 행은 ERP 정책대로 제외합니다.",
-                  "호텔비 수정 후 해당 행의 최종 진행구분은 예약신청으로 유지됩니다."
+                  "요금 수정 실패 팝업에 내용 복사 버튼을 추가했습니다.",
+                  "수정 실패 내역 전체를 스크롤로 확인하고 한 번에 복사할 수 있습니다."
               ]
 }
