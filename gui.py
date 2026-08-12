@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.16"
+APP_VERSION = "v5.0.18"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -6826,14 +6826,12 @@ class RpaGuiApp:
         return bool(inputs_mapping) and 'adult_hotel_input' in inputs_mapping
 
     @staticmethod
-    def _all_non_closed_rows_have_progress_status(rows, target_code):
-        editable_rows = [
-            row for row in (rows or [])
-            if str(row.get('procCd') or '').strip() != '05'
-        ]
-        return bool(editable_rows) and all(
-            str(row.get('procCd') or '').strip() == str(target_code or '').strip()
-            for row in editable_rows
+    def _progress_status_row_count(rows, progress_code):
+        """현재 페이지에서 지정한 진행구분 행 수를 반환한다."""
+        target_code = str(progress_code or '').strip()
+        return sum(
+            1 for row in (rows or [])
+            if str(row.get('procCd') or '').strip() == target_code
         )
 
     def _select_current_page_rows_by_progress_status(self, selectors, source_progress_code,
@@ -7655,7 +7653,7 @@ class RpaGuiApp:
                     if inputs_mapping:
                         done_actions.append("요금 업데이트")
                     if set_reservation_requested_for_hotel:
-                        done_actions.append("수정 가능 행사→예약신청")
+                        done_actions.append("대기예약→예약신청")
                     elif progress_code:
                         done_actions.append("진행구분 변경")
                     done_summary = " + ".join(done_actions) if done_actions else "작업"
@@ -7689,7 +7687,7 @@ class RpaGuiApp:
                                     if inputs_mapping:
                                         actions.append("요금 입력")
                                     if set_reservation_requested_for_hotel:
-                                        actions.append("수정 가능 행사→예약신청")
+                                        actions.append("대기예약→예약신청")
                                     elif progress_code:
                                         actions.append(f"진행구분 {progress_label}")
                                     print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → {' + '.join(actions)} → 저장{suffix}")
@@ -7698,33 +7696,30 @@ class RpaGuiApp:
                                     current_rows = self._current_page_progress_rows()
                                     if not current_rows:
                                         raise RuntimeError("예약신청 선변경 전 현재 ERP 그리드 행을 읽지 못했습니다.")
-                                    progress_counts = self._current_page_progress_status_counts()
-                                    if not self._should_skip_price_update_for_all_closed(progress_counts):
-                                        if self._all_non_closed_rows_have_progress_status(current_rows, '04'):
-                                            print(" -> 호텔비 수정 대상 행사가 이미 예약신청(04) 상태입니다.")
-                                        else:
-                                            editable_count = len(current_rows) - int(
-                                                progress_counts.get('reservation_closed') or 0
+                                    pending_count = self._progress_status_row_count(current_rows, '06')
+                                    if not pending_count:
+                                        print(" -> 호텔비 수정 전 대기예약(06) 행이 없어 진행구분은 변경하지 않습니다.")
+                                    else:
+                                        print(
+                                            f" -> 호텔비 수정 전 대기예약 {pending_count}건만 "
+                                            "예약신청(04)으로 선변경합니다."
+                                        )
+                                        self._apply_current_page_progress_status(
+                                            selectors,
+                                            '04',
+                                            '예약신청',
+                                            driver_timeout,
+                                            erp_short_pause,
+                                            erp_poll_interval,
+                                            source_progress_code='06',
+                                        )
+                                        if target_page > 1:
+                                            self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                        updated_rows = self._current_page_progress_rows()
+                                        if self._progress_status_row_count(updated_rows, '06'):
+                                            raise RuntimeError(
+                                                "호텔비 수정 전 대기예약 예약신청 선변경 검증에 실패했습니다."
                                             )
-                                            print(
-                                                f" -> 호텔비 수정 전 예약마감 제외 {editable_count}건을 "
-                                                "예약신청(04)으로 선변경합니다."
-                                            )
-                                            self._apply_current_page_progress_status(
-                                                selectors,
-                                                '04',
-                                                '예약신청',
-                                                driver_timeout,
-                                                erp_short_pause,
-                                                erp_poll_interval,
-                                            )
-                                            if target_page > 1:
-                                                self.navigate_to_grid_page(selectors, target_page, driver_timeout)
-                                            updated_rows = self._current_page_progress_rows()
-                                            if not self._all_non_closed_rows_have_progress_status(updated_rows, '04'):
-                                                raise RuntimeError(
-                                                    "호텔비 수정 전 예약신청 선변경 검증에 실패했습니다."
-                                                )
 
                                 if inputs_mapping:
                                     progress_counts = self._current_page_progress_status_counts()
@@ -7844,6 +7839,116 @@ class RpaGuiApp:
         self.root.after(0, lambda: self.progress_lbl.config(text=f'{current} / {total} ({pct}%)'))
         self.root.after(0, lambda: self.progress_bar.config(value=current))
 
+    @staticmethod
+    def _format_failed_update_message(total_cnt, success_cnt, failed_items):
+        failed_items = list(failed_items or [])
+        fail_cnt = len(failed_items)
+        lines = [
+            f"전체 {total_cnt}일 중 {fail_cnt}일이 수정되지 않았습니다.",
+            f"(성공 {success_cnt}일 / 실패·스킵 {fail_cnt}일)",
+            "",
+            "아래 날짜는 요금이 반영되지 않았습니다.",
+            "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.",
+            "",
+        ]
+        for item in failed_items:
+            reason = item.get("error") or "조회결과 없음"
+            lines.append(f"• {item.get('date') or '-'}  ({reason})")
+        return "\n".join(lines)
+
+    def _show_failed_update_dialog(self, title, message):
+        """수정 실패 상세를 스크롤·클립보드 복사가 가능한 전용 창으로 표시한다."""
+        popup_bg = '#ffffff'
+        popup_fg = '#111827'
+        popup_border = '#d1d5db'
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.configure(bg=popup_bg)
+        popup.geometry('600x680')
+        popup.minsize(500, 420)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        header = tk.Frame(popup, bg=popup_bg, padx=16, pady=(14, 8))
+        header.pack(fill=tk.X)
+        tk.Label(
+            header,
+            text='⚠️ 수정 실패 내역',
+            font=('맑은 고딕', 11, 'bold'),
+            bg=popup_bg,
+            fg='#b45309',
+        ).pack(anchor=tk.W)
+        tk.Label(
+            header,
+            text='내용 복사 버튼으로 실패 목록 전체를 클립보드에 복사할 수 있습니다.',
+            font=('맑은 고딕', 9),
+            bg=popup_bg,
+            fg='#4b5563',
+        ).pack(anchor=tk.W, pady=(3, 0))
+
+        body = tk.Frame(popup, bg=popup_border)
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 10))
+        text_widget = ScrolledText(
+            body,
+            bg=popup_bg,
+            fg=popup_fg,
+            insertbackground=popup_fg,
+            selectbackground='#bfdbfe',
+            selectforeground=popup_fg,
+            font=('맑은 고딕', 10),
+            bd=0,
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+            wrap=tk.WORD,
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        text_widget.insert('1.0', message)
+        text_widget.config(state=tk.DISABLED)
+
+        footer = tk.Frame(popup, bg=popup_bg, padx=16, pady=(0, 14))
+        footer.pack(fill=tk.X)
+
+        def copy_contents():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(message)
+            self.root.update()
+            copy_btn.config(text='복사됨')
+
+        copy_btn = tk.Button(
+            footer,
+            text='내용 복사',
+            width=12,
+            bg=self.accent_color,
+            fg='white',
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground=self.accent_hover,
+            activeforeground='white',
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=copy_contents,
+        )
+        copy_btn.pack(side=tk.LEFT)
+        self._add_hover(copy_btn, self.accent_color, self.accent_hover)
+
+        confirm_btn = tk.Button(
+            footer,
+            text='확인',
+            width=10,
+            bg='#f3f4f6',
+            fg=popup_fg,
+            font=('맑은 고딕', 9, 'bold'),
+            activebackground='#e5e7eb',
+            activeforeground=popup_fg,
+            bd=0,
+            relief=tk.FLAT,
+            cursor='hand2',
+            command=popup.destroy,
+        )
+        confirm_btn.pack(side=tk.RIGHT)
+        popup.protocol('WM_DELETE_WINDOW', popup.destroy)
+
     def generate_and_show_report(self, history):
         if not history:
             return
@@ -7912,21 +8017,8 @@ class RpaGuiApp:
         failed_items = [x for x in sorted_history if x["status"] != "SUCCESS"]
         try:
             if failed_items:
-                lines = []
-                for item in failed_items[:20]:
-                    reason = item["error"] if item.get("error") else "조회결과 없음"
-                    lines.append(f"• {item['date']}  ({reason})")
-                more = len(failed_items) - 20
-                if more > 0:
-                    lines.append(f"… 외 {more}건")
-                msg = (
-                    f"전체 {total_cnt}일 중 {fail_cnt}일이 수정되지 않았습니다.\n"
-                    f"(성공 {success_cnt}일 / 실패·스킵 {fail_cnt}일)\n\n"
-                    "아래 날짜는 요금이 반영되지 않았습니다.\n"
-                    "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.\n\n"
-                    + "\n".join(lines)
-                )
-                messagebox.showwarning(f"⚠️ 요금 수정 실패 {fail_cnt}건 — 확인 필요", msg)
+                msg = self._format_failed_update_message(total_cnt, success_cnt, failed_items)
+                self._show_failed_update_dialog(f"⚠️ 요금 수정 실패 {fail_cnt}건 — 확인 필요", msg)
             else:
                 messagebox.showinfo(
                     "요금 수정 완료",

@@ -216,22 +216,20 @@ class FareEngineTest(unittest.TestCase):
             )
         )
 
-    def test_mixed_progress_rows_require_all_non_closed_rows_to_be_requested(self):
+    def test_hotel_update_targets_only_pending_reservation_rows(self):
         mixed_rows = [
             {"procCd": "06", "procNm": "대기예약"},
             {"procCd": "04", "procNm": "예약신청"},
+            {"procCd": "10", "procNm": "팀출발"},
             {"procCd": "07", "procNm": "예약가능"},
             {"procCd": "05", "procNm": "예약마감"},
         ]
-        requested_rows = [
-            {"procCd": "04", "procNm": "예약신청"},
-            {"procCd": "04", "procNm": "예약신청"},
-            {"procCd": "04", "procNm": "예약신청"},
-            {"procCd": "05", "procNm": "예약마감"},
-        ]
 
-        self.assertFalse(RpaGuiApp._all_non_closed_rows_have_progress_status(mixed_rows, "04"))
-        self.assertTrue(RpaGuiApp._all_non_closed_rows_have_progress_status(requested_rows, "04"))
+        self.assertEqual(RpaGuiApp._progress_status_row_count(mixed_rows, "06"), 1)
+        self.assertEqual(RpaGuiApp._progress_status_row_count(mixed_rows, "04"), 1)
+        self.assertEqual(RpaGuiApp._progress_status_row_count(mixed_rows, "10"), 1)
+        self.assertEqual(RpaGuiApp._progress_status_row_count(mixed_rows, "07"), 1)
+        self.assertEqual(RpaGuiApp._progress_status_row_count(mixed_rows, "05"), 1)
 
     def test_sheet_pending_reservation_text_becomes_progress_status(self):
         class Var:
@@ -803,6 +801,21 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("완료", app._job_status_text(app.job_queue[0]))
         self.assertIn("성공 1", app._job_status_text(app.job_queue[0]))
         self.assertIn("건너뜀 1", app._job_status_text(app.job_queue[0]))
+
+    def test_failed_update_message_includes_all_failure_details(self):
+        failed_items = [
+            {"date": "요금구분: 나트랑 / 항공사: VN / 2027-03-01", "error": "조회결과 없음"},
+            {"date": "요금구분: 다낭 / 항공사: 7C / 2027-03-02", "error": "호텔명 필터 불일치"},
+        ]
+
+        message = RpaGuiApp._format_failed_update_message(1157, 1081, failed_items)
+
+        self.assertIn("전체 1157일 중 2일이 수정되지 않았습니다.", message)
+        self.assertIn("성공 1081일 / 실패·스킵 2일", message)
+        self.assertIn("나트랑 / 항공사: VN / 2027-03-01", message)
+        self.assertIn("조회결과 없음", message)
+        self.assertIn("다낭 / 항공사: 7C / 2027-03-02", message)
+        self.assertIn("호텔명 필터 불일치", message)
 
     def test_add_current_sheet_to_job_queue_accepts_hotel_only_condition(self):
         class Var:
