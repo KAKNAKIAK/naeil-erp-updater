@@ -6,19 +6,32 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-def select_excel_file():
+def select_excel_file(parent=None):
     """
     윈도우 파일 대화상자를 띄워 사용자가 엑셀 파일을 선택하게 합니다.
+    parent가 주어지면 해당 부모 창을 사용하고, None이면 독립 임시 root를 생성하여 안전하게 정리합니다.
     """
+    if parent is not None:
+        return filedialog.askopenfilename(
+            parent=parent,
+            title="요금 업데이트 엑셀 파일 선택",
+            filetypes=[("Excel Files", "*.xlsx *.xls")]
+        )
     root = tk.Tk()
     root.withdraw()
     root.attributes('-topmost', True)
 
-    file_path = filedialog.askopenfilename(
-        title="요금 업데이트 엑셀 파일 선택",
-        filetypes=[("Excel Files", "*.xlsx *.xls")]
-    )
-    root.destroy()
+    try:
+        file_path = filedialog.askopenfilename(
+            parent=root,
+            title="요금 업데이트 엑셀 파일 선택",
+            filetypes=[("Excel Files", "*.xlsx *.xls")]
+        )
+    finally:
+        try:
+            root.destroy()
+        except Exception:
+            pass
     return file_path
 
 def _normalize_dt(raw_dt):

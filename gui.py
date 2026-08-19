@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.19"
+APP_VERSION = "v5.0.20"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -158,6 +158,38 @@ def eval_arithmetic(expr, resolver=None):
         return _eval_ast_node(ast.parse(s, mode='eval').body, resolver)
     except Exception:
         return None
+
+
+def ensure_window_visible(window):
+    """최소화된 창을 안전하게 복원하고 팝업/창이 화면에 표시되도록 한다.
+
+    - window가 최소화('iconic') 상태이면 deiconify()로 복원
+    - lift()로 윈도우 스택 전면으로 올림
+    - 일시적 topmost 설정 후 즉시 해제하여 z-order를 전면으로 당김 (영구 topmost / 무조건 focus_force 배제)
+    """
+    if window is None:
+        return
+    try:
+        if hasattr(window, 'state') and window.state() == 'iconic':
+            window.deiconify()
+        if hasattr(window, 'lift'):
+            window.lift()
+        if hasattr(window, 'attributes'):
+            window.attributes('-topmost', True)
+            if hasattr(window, 'after_idle'):
+                window.after_idle(lambda: _safe_clear_topmost(window))
+            elif hasattr(window, 'after'):
+                window.after(50, lambda: _safe_clear_topmost(window))
+    except Exception:
+        pass
+
+
+def _safe_clear_topmost(window):
+    try:
+        if hasattr(window, 'attributes'):
+            window.attributes('-topmost', False)
+    except Exception:
+        pass
 
 
 class NullStream:
@@ -287,8 +319,10 @@ class RpaGuiApp:
         self.is_running = False
         self.is_paused = False
         self.is_user_stopped = False
+        self.is_closing = False
         self.driver = None
         self.console_redirector = None
+        self._is_loading_excel = False
         self.toolbar_buttons = []
         self.topas_thread = None
         self.topas_results_raw = []
@@ -777,6 +811,20 @@ class RpaGuiApp:
         if hasattr(self, 'status_dot'):
             self.status_dot.config(fg=color)
         self.status_lbl.config(text=text, fg=color)
+
+    def _sleep_interruptible(self, seconds, check_interval=0.05, stop_checker=None):
+        """중지 요청을 감지하면서 대기하는 helper. 중지 시 즉시 False를 반환한다."""
+        if seconds <= 0:
+            return True
+        if stop_checker is None:
+            stop_checker = lambda: not self.is_running
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if stop_checker():
+                return False
+            remaining = deadline - time.time()
+            time.sleep(min(remaining, check_interval))
+        return not stop_checker()
 
     # ------------------------------------------------------------------
     # 로딩 애니메이션 (캐릭터 GIF)
@@ -4580,20 +4628,87 @@ class RpaGuiApp:
             )
 
     def import_excel_to_sheet(self):
-        path = excel_loader.select_excel_file()
+        if getattr(self, '_is_loading_excel', False):
+            return
+        if self.is_running:
+            messagebox.showwarning('실행 중', 'ERP 또는 TOPAS 작업 실행 중에는 엑셀을 불러올 수 없습니다.', parent=self.root)
+            return
+
+        path = excel_loader.select_excel_file(parent=self.root)
         if not path:
             return
+
+        self._is_loading_excel = True
+        self.set_status('엑셀 파일을 분석하는 중입니다…', self.accent_orange)
+        self.show_loading('엑셀 파일을 읽고 있어요…')
+        self._set_inputs_locked(True)
         try:
-            job_res = excel_loader.load_fare_jobs_from_excel(path)
-        except Exception as e:
-            messagebox.showerror('요금불러오기 실패', f'엑셀 작업 목록을 읽는 중 오류가 발생했습니다.\n{e}')
+            self.start_btn.config(state=tk.DISABLED)
+        except Exception:
+            pass
+
+        def _worker():
+            job_res = None
+            data_res = None
+            job_error = None
+            data_error = None
+            try:
+                job_res = excel_loader.load_fare_jobs_from_excel(path)
+            except Exception as e:
+                job_error = e
+
+            if not (job_res and job_res.get('detected')) and job_error is None:
+                try:
+                    data_res = excel_loader.load_and_validate_fares(path)
+                except Exception as e:
+                    data_error = e
+
+            if getattr(self, 'is_closing', False):
+                return
+
+            def _apply_on_main():
+                if getattr(self, 'is_closing', False):
+                    return
+                try:
+                    self._apply_imported_excel_data(path, job_res, job_error, data_res, data_error)
+                finally:
+                    self._is_loading_excel = False
+                    self.hide_loading()
+                    self._set_inputs_locked(False)
+                    try:
+                        self.start_btn.config(state=tk.NORMAL)
+                        self._update_start_button_label()
+                    except Exception:
+                        pass
+
+            try:
+                if (
+                    hasattr(self, 'root')
+                    and self.root is not None
+                    and not getattr(self, 'is_closing', False)
+                ):
+                    if hasattr(self.root, 'winfo_exists'):
+                        try:
+                            if not self.root.winfo_exists():
+                                return
+                        except Exception:
+                            return
+                    self.root.after(0, _apply_on_main)
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_imported_excel_data(self, path, job_res, job_error, data_res, data_error):
+        if job_error is not None:
+            messagebox.showerror('요금불러오기 실패', f'엑셀 작업 목록을 읽는 중 오류가 발생했습니다.\n{job_error}', parent=self.root)
             return
         if job_res and job_res.get('detected'):
             jobs = job_res.get('jobs') or []
             errors = job_res.get('errors') or []
             if not jobs:
                 preview = "\n".join(errors[:10]) if errors else '조건열은 감지됐지만 유효한 작업 행이 없습니다.'
-                messagebox.showwarning('작업 목록 없음', preview)
+                messagebox.showwarning('작업 목록 없음', preview, parent=self.root)
                 return
             if self.job_queue:
                 append = messagebox.askyesno(
@@ -4601,6 +4716,7 @@ class RpaGuiApp:
                     '이미 등록된 작업 목록이 있습니다.\n\n'
                     '예: 기존 목록 뒤에 추가\n'
                     '아니오: 기존 목록을 지우고 새로 불러오기',
+                    parent=self.root,
                 )
                 next_jobs = self.job_queue + jobs if append else jobs
             else:
@@ -4614,16 +4730,14 @@ class RpaGuiApp:
                 preview = "\n".join(errors[:10])
                 if len(errors) > 10:
                     preview += f"\n... 외 {len(errors) - 10}건"
-                messagebox.showwarning('일부 행 확인', f'일부 행은 보정 또는 제외했습니다.\n\n{preview}')
+                messagebox.showwarning('일부 행 확인', f'일부 행은 보정 또는 제외했습니다.\n\n{preview}', parent=self.root)
             return
 
-        try:
-            data_res = excel_loader.load_and_validate_fares(path)
-        except Exception as e:
-            messagebox.showerror('요금불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{e}')
+        if data_error is not None:
+            messagebox.showerror('요금불러오기 실패', f'엑셀을 읽는 중 오류가 발생했습니다.\n{data_error}', parent=self.root)
             return
         if not data_res or not data_res[0]:
-            messagebox.showwarning('요금불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.')
+            messagebox.showwarning('요금불러오기', '엑셀에서 유효한 요금 행을 찾지 못했습니다.', parent=self.root)
             return
 
         data, is_period = data_res
@@ -4632,6 +4746,7 @@ class RpaGuiApp:
             '단일 엑셀을 입력표로 불러옵니다.\n\n'
             '기존 작업 목록이 있으면 실행 시 작업 목록이 우선됩니다.\n'
             '기존 작업 목록을 비울까요?',
+            parent=self.root,
         ):
             self._set_job_queue([])
         self._record_sheet_undo_state('엑셀 불러오기')
@@ -5442,7 +5557,7 @@ class RpaGuiApp:
 
     def stop_rpa(self):
         if self.is_running:
-            if messagebox.askyesno('중지 확인', '진행 중인 요금수정을 중지하시겠습니까?'):
+            if messagebox.askyesno('중지 확인', '진행 중인 요금수정을 중지하시겠습니까?', parent=self.root):
                 self.is_running = False
                 self.is_paused = False
                 self.is_user_stopped = True
@@ -5955,8 +6070,22 @@ class RpaGuiApp:
                 chunk_size = min(batch_size, count - done)
                 step_started = time.perf_counter()
                 self._topas_send_ac1_batch(driver, chunk_size)
+                if self.topas_stop_requested or not self.is_running:
+                    stopped = True
+                    break
+
                 blocks = self._topas_wait_next_blocks(driver, previous_block, chunk_size)
                 chunk_elapsed = time.perf_counter() - step_started
+
+                if self.topas_stop_requested or not self.is_running:
+                    stopped = True
+                    if blocks:
+                        for block in blocks:
+                            done += 1
+                            results.append(block.raw_text)
+                            previous_block = block
+                    break
+
                 if not blocks:
                     raise TimeoutError('TOPAS가 AC1 묶음에 대한 새 응답을 반환하지 않았습니다.')
 
@@ -6004,7 +6133,11 @@ class RpaGuiApp:
         last_error = None
 
         for attempt in range(3):
+            if self.topas_stop_requested or not self.is_running:
+                return
             prompt = self._topas_wait_prompt_input(driver, timeout=5 if attempt == 0 else 2)
+            if self.topas_stop_requested or not self.is_running:
+                return
             if prompt is None:
                 last_error = RuntimeError('TOPAS 명령 입력창을 찾지 못했습니다.')
                 continue
@@ -6019,6 +6152,8 @@ class RpaGuiApp:
 
             try:
                 prompt = self._topas_wait_prompt_input(driver, timeout=2)
+                if self.topas_stop_requested or not self.is_running:
+                    return
                 if prompt is None:
                     continue
                 self._topas_prepare_prompt_input(driver, prompt)
@@ -6066,6 +6201,8 @@ class RpaGuiApp:
     def _topas_wait_prompt_input(self, driver, timeout=8):
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
+            if self.topas_stop_requested or not self.is_running:
+                return None
             prompt = self._topas_find_prompt_input(driver)
             if prompt is not None:
                 return prompt
@@ -6090,6 +6227,9 @@ class RpaGuiApp:
         expected_count = max(1, int(expected_count))
 
         while time.perf_counter() < deadline:
+            if self.topas_stop_requested or not self.is_running:
+                return candidate_blocks if candidate_blocks else None
+
             blocks = self._topas_get_blocks_after(driver, previous_block)
             if blocks:
                 last_request = blocks[-1].request_command
@@ -6107,6 +6247,10 @@ class RpaGuiApp:
                     if stable_for >= stable_wait and len(candidate_blocks) >= expected_count:
                         return candidate_blocks
             time.sleep(poll_interval)
+
+        if self.topas_stop_requested or not self.is_running:
+            return candidate_blocks if candidate_blocks else None
+
         raise TimeoutError(
             f'TOPAS 묶음 응답 대기 {int(timeout)}초 초과: '
             f'{expected_count}개 중 {last_loaded_count}개만 확인했습니다. '
@@ -6402,7 +6546,8 @@ class RpaGuiApp:
         self.clean_up_ui_after_topas()
         if error_message:
             self._set_topas_status('조회 오류', self.accent_red)
-            messagebox.showerror('TOPAS 조회 오류', error_message)
+            ensure_window_visible(self.root)
+            messagebox.showerror('TOPAS 조회 오류', error_message, parent=self.root)
             if results:
                 self._apply_topas_results_to_slot(results, stopped=True)
             return
@@ -6461,6 +6606,7 @@ class RpaGuiApp:
             self.topas_current_ac1_count = 0
 
     def show_topas_results_popup(self, results, elapsed, stopped=False):
+        ensure_window_visible(self.root)
         title = 'TOPAS 조회 결과'
         popup_bg = '#ffffff'
         popup_fg = '#111827'
@@ -6470,6 +6616,8 @@ class RpaGuiApp:
         popup.configure(bg=popup_bg)
         popup.geometry('980x680')
         popup.minsize(720, 460)
+        popup.transient(self.root)
+        ensure_window_visible(popup)
 
         header = tk.Frame(popup, bg=popup_bg, padx=14, pady=12)
         header.pack(fill=tk.X)
@@ -7062,7 +7210,8 @@ class RpaGuiApp:
             if not self.is_running:
                 return False
 
-            time.sleep(poll_interval)
+            if not self._sleep_interruptible(poll_interval):
+                return False
             elapsed = time.time() - started_at
 
             try:
@@ -7168,7 +7317,11 @@ class RpaGuiApp:
                 return True
 
             print(f" -> [페이지 이동 재시도] 목표 {target_page} / 현재 {cur} (시도 {attempt + 1}/3)")
-            time.sleep(0.5)
+            if not self._sleep_interruptible(0.5):
+                return False
+
+        if not self.is_running:
+            return False
 
         raise RuntimeError(
             f"{target_page}페이지로 이동하지 못했습니다(현재 {cur}). "
@@ -7375,7 +7528,13 @@ class RpaGuiApp:
                 err_text = "config.json selectors 누락: " + ", ".join(missing_selector_keys)
                 print(f"[오류] {err_text}")
                 self.root.after(0, self.hide_loading)
-                self.root.after(0, lambda msg=err_text: messagebox.showerror("설정 오류", msg))
+                self.root.after(
+                    0,
+                    lambda msg=err_text: (
+                        ensure_window_visible(self.root),
+                        messagebox.showerror("설정 오류", msg, parent=self.root),
+                    ),
+                )
                 return
 
             try:
@@ -7388,10 +7547,14 @@ class RpaGuiApp:
                 self.root.after(0, self.hide_loading)
                 self.root.after(
                     0,
-                    lambda msg=err_text: messagebox.showerror(
-                        "브라우저 선택 실패",
-                        f"{msg}\n\n"
-                        "요금수정 화면이 디버그 Chrome 안에 열려 있는지 확인해 주세요.",
+                    lambda msg=err_text: (
+                        ensure_window_visible(self.root),
+                        messagebox.showerror(
+                            "브라우저 선택 실패",
+                            f"{msg}\n\n"
+                            "요금수정 화면이 디버그 Chrome 안에 열려 있는지 확인해 주세요.",
+                            parent=self.root,
+                        ),
                     ),
                 )
                 return
@@ -7405,7 +7568,13 @@ class RpaGuiApp:
             if not self.find_and_switch_frame(selectors["search_date_input"]):
                 err_text = "출발일자 입력 필드를 찾을 수 없어 ERP 조회 조건을 설정하지 못했습니다."
                 print(f"[오류] {err_text}")
-                self.root.after(0, lambda msg=err_text: messagebox.showerror("ERP 화면 오류", msg))
+                self.root.after(
+                    0,
+                    lambda msg=err_text: (
+                        ensure_window_visible(self.root),
+                        messagebox.showerror("ERP 화면 오류", msg, parent=self.root),
+                    ),
+                )
                 return
 
             for index, row in enumerate(self.fares_data):
@@ -7566,7 +7735,12 @@ class RpaGuiApp:
                             if norm_days and all(norm_date <= d <= norm_date_end for d in norm_days):
                                 matched = True
                                 break
-                        time.sleep(erp_poll_interval)
+                        if not self._sleep_interruptible(erp_poll_interval):
+                            break
+
+                    if not self.is_running:
+                        print(" -> [중단] 사용자 중지로 조회를 멈춥니다.")
+                        break
 
                     if not matched:
                         print(f" -> [조회결과 없음] {date_log_str} 일자 데이터를 반영하지 못했습니다. ERP에서 직접 날짜 조회를 확인해 주세요.")
@@ -7679,7 +7853,8 @@ class RpaGuiApp:
                                 if target_page > 1 or attempt > 1:
                                     if attempt == 1:
                                         print(f" -> [페이지 이동] {target_page}/{total_pages}페이지로 재이동합니다...")
-                                    self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                    if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+                                        break
 
                                 if total_pages > 1:
                                     suffix = f" (재시도 {attempt}/{page_max_retries})" if attempt > 1 else ""
@@ -7714,7 +7889,8 @@ class RpaGuiApp:
                                             source_progress_code='06',
                                         )
                                         if target_page > 1:
-                                            self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                            if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+                                                break
                                         updated_rows = self._current_page_progress_rows()
                                         if self._progress_status_row_count(updated_rows, '06'):
                                             raise RuntimeError(
@@ -7744,7 +7920,8 @@ class RpaGuiApp:
                                         )
                                 if progress_code and not set_reservation_requested_for_hotel:
                                     if inputs_mapping:
-                                        self.navigate_to_grid_page(selectors, target_page, driver_timeout)
+                                        if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+                                            break
                                     if self._current_page_progress_status_matches(progress_code, progress_label):
                                         print(f" -> 진행구분 확인: 현재 페이지가 이미 {progress_label} 상태입니다.")
                                     else:
@@ -7763,7 +7940,11 @@ class RpaGuiApp:
                                 if attempt < page_max_retries and self.is_running:
                                     backoff = page_pause + attempt
                                     print(f" -> [재시도 대기] {backoff:.1f}초 후 {target_page}페이지 다시 시도합니다…")
-                                    time.sleep(backoff)
+                                    self._sleep_interruptible(backoff)
+
+                        if not self.is_running:
+                            print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
+                            break
 
                         if page_ok:
                             pages_done += 1
@@ -7776,7 +7957,7 @@ class RpaGuiApp:
                         target_page += 1
                         # 서버 과부하(408) 완화를 위해 페이지 사이에 짧은 텀
                         if page_pause > 0 and self.is_running and target_page <= total_pages:
-                            time.sleep(page_pause)
+                            self._sleep_interruptible(page_pause)
 
                     if not self.is_running:
                         raise RuntimeError(f"사용자 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤")
@@ -7858,6 +8039,7 @@ class RpaGuiApp:
 
     def _show_failed_update_dialog(self, title, message):
         """수정 실패 상세를 스크롤·클립보드 복사가 가능한 전용 창으로 표시한다."""
+        ensure_window_visible(self.root)
         popup_bg = '#ffffff'
         popup_fg = '#111827'
         popup_border = '#d1d5db'
@@ -7868,6 +8050,7 @@ class RpaGuiApp:
         popup.minsize(500, 420)
         popup.transient(self.root)
         popup.grab_set()
+        ensure_window_visible(popup)
 
         header = tk.Frame(popup, bg=popup_bg, padx=16, pady=0)
         header.pack(fill=tk.X, pady=(14, 8))
@@ -8016,13 +8199,15 @@ class RpaGuiApp:
         # 요금 미수정은 매출에 직결되는 사안이라, 사용자가 결과를 놓치지 않도록 한다.
         failed_items = [x for x in sorted_history if x["status"] != "SUCCESS"]
         try:
+            ensure_window_visible(self.root)
             if failed_items:
                 msg = self._format_failed_update_message(total_cnt, success_cnt, failed_items)
                 self._show_failed_update_dialog(f"⚠️ 요금 수정 실패 {fail_cnt}건 — 확인 필요", msg)
             else:
                 messagebox.showinfo(
                     "요금 수정 완료",
-                    f"전체 {total_cnt}일을 모두 정상적으로 수정했습니다."
+                    f"전체 {total_cnt}일을 모두 정상적으로 수정했습니다.",
+                    parent=self.root,
                 )
         except Exception:
             pass
@@ -8069,12 +8254,28 @@ if __name__ == "__main__":
     app = RpaGuiApp(root_win)
 
     def on_window_close():
+        ensure_window_visible(root_win)
         if app.is_running:
-            if messagebox.askyesno("앱 종료", "현재 RPA가 작동 중입니다. 중지하고 프로그램을 종료하시겠습니까?"):
+            if messagebox.askyesno("앱 종료", "현재 RPA가 작동 중입니다. 중지하고 프로그램을 종료하시겠습니까?", parent=root_win):
+                app.is_closing = True
                 app.is_running = False
-                root_win.destroy()
+                try:
+                    root_win.destroy()
+                except Exception:
+                    pass
+        elif getattr(app, '_is_loading_excel', False):
+            if messagebox.askyesno("앱 종료", "엑셀 파일을 불러오는 중입니다. 불러오기를 취소하고 프로그램을 종료하시겠습니까?", parent=root_win):
+                app.is_closing = True
+                try:
+                    root_win.destroy()
+                except Exception:
+                    pass
         else:
-            root_win.destroy()
+            app.is_closing = True
+            try:
+                root_win.destroy()
+            except Exception:
+                pass
 
     root_win.protocol("WM_DELETE_WINDOW", on_window_close)
     root_win.mainloop()
