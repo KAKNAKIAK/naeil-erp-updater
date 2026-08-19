@@ -49,7 +49,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.18"
+APP_VERSION = "v5.0.19"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7869,8 +7869,8 @@ class RpaGuiApp:
         popup.transient(self.root)
         popup.grab_set()
 
-        header = tk.Frame(popup, bg=popup_bg, padx=16, pady=(14, 8))
-        header.pack(fill=tk.X)
+        header = tk.Frame(popup, bg=popup_bg, padx=16, pady=0)
+        header.pack(fill=tk.X, pady=(14, 8))
         tk.Label(
             header,
             text='⚠️ 수정 실패 내역',
@@ -7906,8 +7906,8 @@ class RpaGuiApp:
         text_widget.insert('1.0', message)
         text_widget.config(state=tk.DISABLED)
 
-        footer = tk.Frame(popup, bg=popup_bg, padx=16, pady=(0, 14))
-        footer.pack(fill=tk.X)
+        footer = tk.Frame(popup, bg=popup_bg, padx=16, pady=0)
+        footer.pack(fill=tk.X, pady=(0, 14))
 
         def copy_contents():
             self.root.clipboard_clear()

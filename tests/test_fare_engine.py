@@ -817,6 +817,25 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("다낭 / 항공사: 7C / 2027-03-02", message)
         self.assertIn("호텔명 필터 불일치", message)
 
+    def test_show_failed_update_dialog_creates_widgets_without_error(self):
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            app = RpaGuiApp.__new__(RpaGuiApp)
+            app.root = root
+            app.accent_color = "#2563eb"
+            app.accent_hover = "#1d4ed8"
+            app._add_hover = lambda btn, bg, hbg: None
+            app._show_failed_update_dialog("테스트 실패 팝업", "실패 내용 테스트")
+            children = root.winfo_children()
+            self.assertTrue(len(children) > 0)
+            popup = children[-1]
+            self.assertIsInstance(popup, tk.Toplevel)
+            popup.destroy()
+        finally:
+            root.destroy()
+
     def test_add_current_sheet_to_job_queue_accepts_hotel_only_condition(self):
         class Var:
             def __init__(self, value=""):
