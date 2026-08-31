@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.20",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.20/NaeilERPUpdater_Setup_v5.0.20.exe",
-    "sha256":  "82953A66CA132C173641420CA4172122C47F668B9407F649EA574D1903CBE88D",
+    "version":  "v5.0.21",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.21/NaeilERPUpdater_Setup_v5.0.21.exe",
+    "sha256":  "1D83020F69EB0E438300BEC84F8434DBA9FABECAE1B5D859FC236A68977CA5A2",
     "notes":  [
-                  "프로그램이 최소화되어 있어도 완료·실패 팝업이 화면 앞으로 복원됩니다.",
-                  "엑셀 파일을 읽는 동안 화면 멈춤과 중복 실행을 방지했습니다.",
-                  "ERP와 TOPAS 대기 중 중지 요청에 더 빠르고 안전하게 반응합니다."
+                  "호텔비 수정 기간이 여러 페이지로 나뉘어도 실제 행 데이터가 확인된 뒤에만 저장합니다.",
+                  "페이지 정보가 불안정하거나 전체 페이지 수를 확인하지 못하면 추정 실행하지 않고 안전하게 중단합니다.",
+                  "이전 페이지 데이터가 남아 있는 상태에서는 저장하지 않고 재시도합니다."
               ]
 }
