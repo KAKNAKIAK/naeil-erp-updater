@@ -13,6 +13,7 @@ import sys
 import json
 import time
 import csv
+import hashlib
 import copy
 import ast
 import operator
@@ -49,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.20"
+APP_VERSION = "v5.0.21"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7053,7 +7054,7 @@ class RpaGuiApp:
 
     def _apply_current_page_progress_status(self, selectors, progress_code, progress_label,
                                             driver_timeout, erp_short_pause, erp_poll_interval,
-                                            source_progress_code=None):
+                                            source_progress_code=None, target_page=1):
         """현재 조회/페이지의 선택 행에 정보일괄수정 진행구분을 적용한다."""
         selected_count = None
         if source_progress_code is not None:
@@ -7145,7 +7146,7 @@ class RpaGuiApp:
 
         wait.until(lambda d: not d.find_elements(By.CSS_SELECTOR, proc_select_selector))
         self.wait_until_grid_ready_after_save(selectors, driver_timeout)
-        if source_progress_code is not None:
+        if source_progress_code is not None and int(target_page or 1) == 1:
             remaining_source_rows = sum(
                 1 for row in self._current_page_progress_rows()
                 if str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
@@ -7241,52 +7242,211 @@ class RpaGuiApp:
         print(f" -> [주의] 그리드 차단막 대기 {int(timeout)}초 초과. 현재 상태로 다음 날짜를 진행합니다.")
         return False
 
-    def get_grid_page_state(self):
-        """현재 그리드의 페이지 상태를 읽어 (현재페이지, 전체페이지수, 총건수, 다음버튼노출)을 반환한다.
+    @staticmethod
+    def _build_row_fingerprint(row_keys):
+        """AUIGrid 행 고유키 목록으로부터 안정적인 fingerprint를 생성한다."""
+        if not row_keys:
+            return ""
+        joined = ",".join(str(k) for k in row_keys)
+        digest = hashlib.sha1(joined.encode('utf-8')).hexdigest()
+        return f"{len(row_keys)}:{digest}"
 
-        ERP의 totalPage 변수는 행 바인딩보다 수 초 늦게 채워지므로(실측 5~8초 지연),
-        조회 결과 모든 행에 즉시 담기는 totRows로 전체 페이지 수를 직접 계산한다.
-        이 방식이 totalPage 지연으로 인한 '2페이지 이후 통째 누락' 버그를 원천 차단한다.
-        """
-        try:
-            page_size = int(self.config.get('grid_page_size', 500)) or 500
-        except (TypeError, ValueError):
-            page_size = 500
+    def get_grid_page_snapshot(self):
+        """현재 AUIGrid의 페이지 스냅샷(현재페이지, 행수, totRows, next버튼노출, fingerprint)을 읽어 반환한다."""
         grid_id = self.config.get('grid_id', '#gridMain')
         js = """
         try {
-            var gid = arguments[0];
+            var gid = arguments[0] || '#gridMain';
             var d = (typeof AUIGrid !== 'undefined') ? AUIGrid.getGridData(gid) : null;
-            var tot = (d && d.length) ? (d[0].totRows || d.length) : 0;
+            var cur = (typeof currentPage !== 'undefined' ? currentPage : 1);
             var nextBtn = document.querySelector('#paging-button-next');
+            var nextVis = !!(nextBtn && nextBtn.offsetParent !== null);
+            var declaredPages = (typeof totalPage !== 'undefined' && totalPage) ? Number(totalPage) : 0;
+            if (!d || !d.length) {
+                return {
+                    cur: cur,
+                    pageRows: 0,
+                    totRows: 0,
+                    totRowsReady: false,
+                    declaredTotalPages: declaredPages,
+                    nextVisible: nextVis,
+                    rowKeys: []
+                };
+            }
+            var totReady = !!(d[0] && d[0].totRows != null && Number(d[0].totRows) > 0);
+            var tot = totReady ? Number(d[0].totRows) : 0;
+            var keys = [];
+            for (var i = 0; i < d.length; i++) {
+                var r = d[i];
+                if (!r) continue;
+                var k = [
+                    r.basePriceSeq != null ? r.basePriceSeq : '',
+                    r.eventSeq != null ? r.eventSeq : '',
+                    r.eventCd != null ? r.eventCd : '',
+                    r.goodSeq != null ? r.goodSeq : '',
+                    r.startDay != null ? r.startDay : '',
+                    r.procCd != null ? r.procCd : '',
+                    r._$uid != null ? r._$uid : ''
+                ].join(':');
+                if (k === '::::::') {
+                    k = 'row_' + i + '_' + (r.hotelSeq || '') + '_' + (r.hotelKorNm || '');
+                }
+                keys.push(k);
+            }
             return {
-                cur: (typeof currentPage !== 'undefined' ? currentPage : 1),
+                cur: cur,
+                pageRows: d.length,
                 totRows: tot,
-                pageRows: (d ? d.length : 0),
-                nextVisible: !!(nextBtn && nextBtn.offsetParent !== null)
+                totRowsReady: totReady,
+                declaredTotalPages: declaredPages,
+                nextVisible: nextVis,
+                rowKeys: keys
             };
         } catch (e) {
-            return {cur: 1, totRows: 0, pageRows: 0, nextVisible: false};
+            return {
+                cur: 1,
+                pageRows: 0,
+                totRows: 0,
+                totRowsReady: false,
+                declaredTotalPages: 0,
+                nextVisible: false,
+                rowKeys: [],
+                error: String(e)
+            };
         }
         """
         try:
             st = self.driver.execute_script(js, grid_id) or {}
         except Exception as ex:
-            print(f" -> [페이징 상태 경고] 그리드 상태 확인 중 예외: {str(ex)}")
-            st = {}
+            st = {
+                'cur': 1,
+                'pageRows': 0,
+                'totRows': 0,
+                'totRowsReady': False,
+                'declaredTotalPages': 0,
+                'nextVisible': False,
+                'rowKeys': [],
+                'error': str(ex),
+            }
 
-        tot = int(st.get('totRows') or 0)
         cur = int(st.get('cur') or 1)
         page_rows = int(st.get('pageRows') or 0)
+        tot_rows = int(st.get('totRows') or 0)
+        tot_rows_ready = bool(st.get('totRowsReady'))
+        declared_total_pages = int(st.get('declaredTotalPages') or 0)
         next_visible = bool(st.get('nextVisible'))
+        row_keys = st.get('rowKeys') or []
+        fp = self._build_row_fingerprint(row_keys)
 
-        if tot > 0:
+        return {
+            'cur': cur,
+            'page_rows': page_rows,
+            'tot_rows': tot_rows,
+            'tot_rows_ready': tot_rows_ready,
+            'declared_total_pages': declared_total_pages,
+            'next_visible': next_visible,
+            'fingerprint': fp,
+            'row_keys': row_keys,
+        }
+
+    def get_grid_page_state(self, timeout=0.0, poll_interval=None):
+        """현재 그리드의 페이지 상태를 읽어 (현재페이지, 전체페이지수, 총건수, 다음버튼노출)을 반환한다.
+
+        ERP의 totalPage 변수는 행 바인딩보다 수 초 늦게 채워지므로(실측 5~8초 지연),
+        조회 결과 모든 행에 즉시 담기는 totRows로 전체 페이지 수를 직접 계산한다.
+        이 방식이 totalPage 지연으로 인한 '2페이지 이후 통째 누락' 버그를 원천 차단한다.
+        timeout > 0인 경우 totRows와 행 데이터가 안정화될 때까지 폴링한다.
+        """
+        try:
+            page_size = int(self.config.get('grid_page_size', 500)) or 500
+        except (TypeError, ValueError):
+            page_size = 500
+
+        poll_interval = poll_interval or self._float_config('erp_poll_interval', 0.25, 0.1, 1.0)
+        started_at = time.time()
+        timeout = max(0.0, float(timeout or 0.0))
+
+        last_snap = None
+        stable_snap_key = None
+        stable_count = 0
+        snapshot_stable = False
+
+        while True:
+            if not self.is_running:
+                break
+
+            snap = self.get_grid_page_snapshot()
+            last_snap = snap
+            tot = snap.get('tot_rows', 0)
+            tot_ready = bool(snap.get('tot_rows_ready'))
+            declared_pages = int(snap.get('declared_total_pages') or 0)
+            page_rows = snap.get('page_rows', 0)
+            fp = snap.get('fingerprint', '')
+            next_visible = snap.get('next_visible', False)
+
+            # 실제 전체 건수 또는 ERP totalPage가 확인되고 행 fingerprint도 안정화됐는지 확인한다.
+            paging_metadata_ready = tot_ready or declared_pages > 0 or not next_visible
+            snap_key = (fp, tot, declared_pages, next_visible)
+            if paging_metadata_ready and page_rows > 0 and fp:
+                if stable_snap_key == snap_key:
+                    stable_count += 1
+                    if stable_count >= 2 or timeout <= 0:
+                        snapshot_stable = True
+                        break
+                else:
+                    stable_snap_key = snap_key
+                    stable_count = 1
+            elif not next_visible and page_rows == 0 and tot == 0:
+                if timeout <= 0 or (time.time() - started_at) >= timeout:
+                    break
+
+            if timeout <= 0 or (time.time() - started_at) >= timeout:
+                break
+
+            if not self._sleep_interruptible(poll_interval):
+                break
+
+        if timeout > 0 and last_snap and last_snap.get('page_rows', 0) > 0 and not snapshot_stable:
+            if (
+                last_snap.get('next_visible')
+                and not last_snap.get('tot_rows_ready')
+                and int(last_snap.get('declared_total_pages') or 0) <= 0
+            ):
+                raise RuntimeError(
+                    "ERP 전체 페이지 수를 확인하지 못했습니다. "
+                    "데이터 누락을 막기 위해 이 기간 처리를 중단합니다."
+                )
+            raise RuntimeError(
+                "ERP 페이지 정보가 안정화되지 않았습니다. "
+                "데이터 누락을 막기 위해 이 기간 처리를 중단합니다."
+            )
+
+        cur = last_snap.get('cur', 1) if last_snap else 1
+        tot = last_snap.get('tot_rows', 0) if last_snap else 0
+        tot_ready = bool(last_snap.get('tot_rows_ready')) if last_snap else False
+        declared_pages = int(last_snap.get('declared_total_pages') or 0) if last_snap else 0
+        page_rows = last_snap.get('page_rows', 0) if last_snap else 0
+        next_visible = bool(last_snap.get('next_visible', False)) if last_snap else False
+
+        if tot_ready and tot > 0:
             total_pages = max(1, -(-tot // page_size))  # ceil(tot / page_size)
-        elif page_rows > 0 and next_visible:
-            # totRows를 못 읽었는데 다음 버튼이 보이면 멀티페이지로 간주(안전측)
+            if declared_pages > 0:
+                total_pages = max(total_pages, declared_pages)
+            if next_visible:
+                total_pages = max(total_pages, max(2, cur + 1))
+        elif declared_pages > 0:
+            total_pages = max(1, declared_pages)
+            tot = page_rows if total_pages == 1 else 0
+        elif next_visible and timeout > 0:
+            raise RuntimeError(
+                "ERP 전체 페이지 수를 확인하지 못했습니다. "
+                "데이터 누락을 막기 위해 이 기간 처리를 중단합니다."
+            )
+        elif next_visible:
             total_pages = max(2, cur + 1)
         else:
             total_pages = 1
+            tot = page_rows
 
         return cur, total_pages, tot, next_visible
 
@@ -7294,15 +7454,23 @@ class RpaGuiApp:
         """저장 후 1페이지로 리셋된 상태에서 target_page로 직접 재이동한다.
 
         ERP 내부 moveToPage(goPage,'this','#gridMain_r')를 직접 호출한다.
-        next 버튼을 N번 누르는 누적 클릭 방식과 달리, 어느 페이지에서든 목표 페이지로
-        한 번에 점프하므로 클릭 누적/락 어긋남으로 인한 페이지 오인이 없다.
-        이동 후 currentPage가 목표값과 일치하는지 검증하고, 실패 시 누락을 막기 위해 예외를 던진다.
+        이동 후 currentPage뿐 아니라 실제 AUIGrid 행 fingerprint가 이전 페이지와 달라지고,
+        비어 있지 않으며, 연속 폴링에서 안정화된 것을 확인한 뒤 성공한다.
+        실패 시 데이터 누락을 막기 위해 예외를 던진다.
         """
         rbutton = self.config.get('paging_search_button', '#gridMain_r')
+        poll_interval = self._float_config('erp_poll_interval', 0.25, 0.1, 1.0)
+        target_page = int(target_page)
         cur = -1
+
         for attempt in range(3):
             if not self.is_running:
                 return False
+
+            # 이동 전 페이지 스냅샷 (이전 페이지 번호 및 fingerprint)
+            prev_snapshot = self.get_grid_page_snapshot()
+            prev_cur = prev_snapshot.get('cur', 1)
+            prev_fp = prev_snapshot.get('fingerprint', '')
 
             self.driver.switch_to.default_content()
             self.find_and_switch_frame(selectors["search_date_input"])
@@ -7312,9 +7480,46 @@ class RpaGuiApp:
             )
             self.wait_until_grid_ready_after_save(selectors, timeout)
 
-            cur, _, _, _ = self.get_grid_page_state()
-            if cur == target_page:
-                return True
+            if not self.is_running:
+                return False
+
+            # 이동 후 페이지 스냅샷 및 행 바인딩 안정화 폴링 검증
+            poll_start = time.time()
+            poll_timeout = max(2.0, min(float(timeout), 10.0))
+            stable_fp = None
+            stable_count = 0
+            required_stable_ticks = 2
+
+            while (time.time() - poll_start) < poll_timeout:
+                if not self.is_running:
+                    return False
+
+                snap = self.get_grid_page_snapshot()
+                cur = snap.get('cur', 1)
+                fp = snap.get('fingerprint', '')
+                page_rows = snap.get('page_rows', 0)
+
+                valid_page = (cur == target_page)
+                has_data = bool(fp and page_rows > 0)
+                # 이전 페이지와 다른 페이지로 이동하는 경우, 이전 페이지의 stale fingerprint는 불인정
+                is_not_stale = True
+                if prev_cur != target_page and prev_fp:
+                    is_not_stale = (fp != prev_fp)
+
+                if valid_page and has_data and is_not_stale:
+                    if stable_fp == fp:
+                        stable_count += 1
+                        if stable_count >= required_stable_ticks:
+                            return True
+                    else:
+                        stable_fp = fp
+                        stable_count = 1
+                else:
+                    stable_fp = None
+                    stable_count = 0
+
+                if not self._sleep_interruptible(poll_interval):
+                    return False
 
             print(f" -> [페이지 이동 재시도] 목표 {target_page} / 현재 {cur} (시도 {attempt + 1}/3)")
             if not self._sleep_interruptible(0.5):
@@ -7793,7 +7998,7 @@ class RpaGuiApp:
                     # totalPage 변수는 행 바인딩보다 늦게 채워지므로(실측 지연), 행에 즉시 담기는
                     # totRows로 전체 페이지 수를 계산한다. 저장하면 그리드가 1페이지로 리셋되므로
                     # 다음 페이지는 moveToPage 직접 점프로 재이동한다.
-                    _cur, total_pages, tot_rows, _next_vis = self.get_grid_page_state()
+                    _cur, total_pages, tot_rows, _next_vis = self.get_grid_page_state(timeout=driver_timeout)
                     if total_pages > 1:
                         print(f" -> [페이징] 총 {tot_rows}건 · 약 {total_pages}페이지 감지. 페이지별로 순차 저장합니다.")
 
@@ -7887,6 +8092,7 @@ class RpaGuiApp:
                                             erp_short_pause,
                                             erp_poll_interval,
                                             source_progress_code='06',
+                                            target_page=target_page,
                                         )
                                         if target_page > 1:
                                             if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
