@@ -20,6 +20,114 @@ class GridPagingTest(unittest.TestCase):
         self.assertEqual(fp1, fp2)
         self.assertNotEqual(fp1, fp3)
 
+    def test_row_identity_ignores_status_and_grid_generated_uid(self):
+        row = {
+            'basePriceSeq': 34635700,
+            'eventSeq': 1001,
+            'eventCd': 'EV01',
+            'goodSeq': 'GD01',
+            'startDay': '2026-07-15',
+            'procCd': '06',
+            '_$uid': 'old-render',
+        }
+        reloaded_row = dict(row, procCd='04', **{'_$uid': 'new-render'})
+        different_row = dict(reloaded_row, basePriceSeq=34635701)
+
+        self.assertEqual(
+            RpaGuiApp._build_row_fingerprint([row]),
+            RpaGuiApp._build_row_fingerprint([reloaded_row]),
+        )
+        self.assertNotEqual(
+            RpaGuiApp._build_row_fingerprint([row]),
+            RpaGuiApp._build_row_fingerprint([different_row]),
+        )
+
+    @staticmethod
+    def _navigation_app_with_clock():
+        app = mock.MagicMock()
+        app.is_running = True
+        app.config = {'paging_search_button': '#gridMain_r'}
+        app._float_config = lambda *args: 0.25
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+            return app.is_running
+
+        app._sleep_interruptible = sleep
+        return app, clock
+
+    def test_retry_rejects_changed_page_number_with_unchanged_rows(self):
+        app, clock = self._navigation_app_with_clock()
+        reads = [0]
+
+        def snapshot():
+            reads[0] += 1
+            return {
+                'cur': 1 if reads[0] == 1 else 2,
+                'page_rows': 500,
+                'fingerprint': '500:page_1_rows',
+            }
+
+        app.get_grid_page_snapshot.side_effect = snapshot
+        with mock.patch('gui.time.time', side_effect=lambda: clock[0]):
+            with self.assertRaisesRegex(RuntimeError, '2페이지로 이동하지 못했습니다'):
+                RpaGuiApp.navigate_to_grid_page(
+                    app, {'search_date_input': '#date'}, target_page=2, timeout=2.0,
+                )
+
+        self.assertEqual(app.driver.execute_script.call_count, 3)
+
+    def test_retry_waits_for_late_target_rows(self):
+        app, clock = self._navigation_app_with_clock()
+        reads = [0]
+
+        def snapshot():
+            reads[0] += 1
+            return {
+                'cur': 1 if reads[0] == 1 else 2,
+                'page_rows': 500,
+                'fingerprint': '500:page_2_rows' if clock[0] >= 3.5 else '500:page_1_rows',
+            }
+
+        app.get_grid_page_snapshot.side_effect = snapshot
+        with mock.patch('gui.time.time', side_effect=lambda: clock[0]):
+            result = RpaGuiApp.navigate_to_grid_page(
+                app, {'search_date_input': '#date'}, target_page=2, timeout=2.0,
+            )
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(clock[0], 3.5)
+        self.assertEqual(app.driver.execute_script.call_count, 2)
+
+    def test_stop_during_stale_retry_does_not_navigate_again(self):
+        app, clock = self._navigation_app_with_clock()
+        reads = [0]
+
+        def snapshot():
+            reads[0] += 1
+            return {
+                'cur': 1 if reads[0] == 1 else 2,
+                'page_rows': 500,
+                'fingerprint': '500:page_1_rows',
+            }
+
+        def sleep_and_stop(seconds):
+            clock[0] += seconds
+            if clock[0] >= 2.5:
+                app.is_running = False
+            return app.is_running
+
+        app._sleep_interruptible = sleep_and_stop
+        app.get_grid_page_snapshot.side_effect = snapshot
+        with mock.patch('gui.time.time', side_effect=lambda: clock[0]):
+            result = RpaGuiApp.navigate_to_grid_page(
+                app, {'search_date_input': '#date'}, target_page=2, timeout=2.0,
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(app.driver.execute_script.call_count, 1)
+
     def test_get_grid_page_snapshot_from_driver(self):
         app = mock.MagicMock()
         app.config = {'grid_id': '#gridMain'}

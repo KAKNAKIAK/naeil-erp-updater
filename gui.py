@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.21"
+APP_VERSION = "v5.0.23"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -5438,6 +5438,12 @@ class RpaGuiApp:
             messagebox.showwarning('실행 중', '이미 실행 중인 작업이 있습니다.')
             return
 
+        # Tk 버튼은 편집기의 포커스를 옮기지 않아 화면에 보이는 값이 아직
+        # 표 데이터에 없을 수 있다. 실행할 행을 읽기 전에 입력을 확정한다.
+        if self.root.focus_get() is self.formula_entry:
+            self._commit_formula_bar()
+        self.sheet.close_text_editor(set_data=True)
+
         if self.job_queue:
             jobs = [self._normalize_job(job) for job in self.job_queue if job.get('rows')]
             for queue_index, job in enumerate(jobs):
@@ -7244,10 +7250,22 @@ class RpaGuiApp:
 
     @staticmethod
     def _build_row_fingerprint(row_keys):
-        """AUIGrid 행 고유키 목록으로부터 안정적인 fingerprint를 생성한다."""
+        """진행구분·그리드 재생성과 무관한 행 고유값으로 fingerprint를 만든다."""
         if not row_keys:
             return ""
-        joined = ",".join(str(k) for k in row_keys)
+        keys = []
+        for index, row in enumerate(row_keys):
+            if isinstance(row, dict):
+                key = ':'.join(
+                    str(row.get(field)) if row.get(field) is not None else ''
+                    for field in ('basePriceSeq', 'eventSeq', 'eventCd', 'goodSeq', 'startDay')
+                )
+                if key == '::::':
+                    key = f"row_{index}_{row.get('hotelSeq') or ''}_{row.get('hotelKorNm') or ''}"
+                keys.append(key)
+            else:
+                keys.append(str(row))
+        joined = ",".join(keys)
         digest = hashlib.sha1(joined.encode('utf-8')).hexdigest()
         return f"{len(row_keys)}:{digest}"
 
@@ -7279,19 +7297,15 @@ class RpaGuiApp:
             for (var i = 0; i < d.length; i++) {
                 var r = d[i];
                 if (!r) continue;
-                var k = [
-                    r.basePriceSeq != null ? r.basePriceSeq : '',
-                    r.eventSeq != null ? r.eventSeq : '',
-                    r.eventCd != null ? r.eventCd : '',
-                    r.goodSeq != null ? r.goodSeq : '',
-                    r.startDay != null ? r.startDay : '',
-                    r.procCd != null ? r.procCd : '',
-                    r._$uid != null ? r._$uid : ''
-                ].join(':');
-                if (k === '::::::') {
-                    k = 'row_' + i + '_' + (r.hotelSeq || '') + '_' + (r.hotelKorNm || '');
-                }
-                keys.push(k);
+                keys.push({
+                    basePriceSeq: r.basePriceSeq,
+                    eventSeq: r.eventSeq,
+                    eventCd: r.eventCd,
+                    goodSeq: r.goodSeq,
+                    startDay: r.startDay,
+                    hotelSeq: r.hotelSeq,
+                    hotelKorNm: r.hotelKorNm
+                });
             }
             return {
                 cur: cur,
@@ -7463,14 +7477,18 @@ class RpaGuiApp:
         target_page = int(target_page)
         cur = -1
 
+        if not self.is_running:
+            return False
+
+        # 첫 이동의 원래 행을 모든 재시도에서 유지한다. 페이지 번호만 먼저 바뀐
+        # 실패를 다음 시도에서 '같은 페이지 재조회'로 오인하면 이전 행이 통과한다.
+        prev_snapshot = self.get_grid_page_snapshot()
+        prev_cur = prev_snapshot.get('cur', 1)
+        prev_fp = prev_snapshot.get('fingerprint', '')
+
         for attempt in range(3):
             if not self.is_running:
                 return False
-
-            # 이동 전 페이지 스냅샷 (이전 페이지 번호 및 fingerprint)
-            prev_snapshot = self.get_grid_page_snapshot()
-            prev_cur = prev_snapshot.get('cur', 1)
-            prev_fp = prev_snapshot.get('fingerprint', '')
 
             self.driver.switch_to.default_content()
             self.find_and_switch_frame(selectors["search_date_input"])
