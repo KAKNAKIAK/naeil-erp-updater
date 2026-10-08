@@ -39,6 +39,50 @@ class ErpQueryTest(unittest.TestCase):
         self.assertFalse(self.query(app))
         self.assertEqual(app._wait_for_erp_query_attempt.call_count, 3)
 
+    def test_mismatch_once_then_match_retries_without_saving(self):
+        app = self.app([{'status': 'MISMATCH', 'rows': 21, 'reason': 'different date'},
+                        {'status': 'MATCH', 'rows': 21}])
+        self.assertTrue(self.query(app))
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 2)
+        app._save_current_page.assert_not_called()
+
+    def test_persistent_mismatch_is_failure_after_only_one_retry(self):
+        app = self.app([{'status': 'MISMATCH', 'rows': 21, 'reason': 'different date'}] * 3)
+        with self.assertRaisesRegex(RuntimeError, '조회 실패.*different date'):
+            self.query(app)
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 2)
+
+    def test_empty_mismatch_sequences_never_exceed_three_attempts(self):
+        for sequence, expected in [
+            (['EMPTY', 'MISMATCH', 'MATCH'], True),
+            (['MISMATCH', 'EMPTY', 'EMPTY'], False),
+            (['EMPTY', 'EMPTY', 'MISMATCH'], 'FAIL'),
+            (['MISMATCH', 'EMPTY', 'MISMATCH'], 'FAIL'),
+        ]:
+            with self.subTest(sequence=sequence):
+                app = self.app([{'status': status, 'rows': 0, 'reason': 'mismatch'} for status in sequence])
+                if expected == 'FAIL':
+                    with self.assertRaisesRegex(RuntimeError, '조회 실패'):
+                        self.query(app)
+                else:
+                    self.assertIs(self.query(app), expected)
+                self.assertEqual(app._wait_for_erp_query_attempt.call_count, 3)
+
+    def test_mismatch_retry_is_available_when_empty_retries_are_disabled(self):
+        app = self.app([{'status': 'MISMATCH', 'rows': 1, 'reason': 'different date'},
+                        {'status': 'MATCH', 'rows': 1}])
+        app.config['erp_query_retries'] = 0
+        self.assertTrue(self.query(app))
+
+    def test_stop_during_mismatch_retry_never_requeries(self):
+        app = self.app([{'status': 'MISMATCH', 'rows': 1, 'reason': 'different date'}])
+        def stopped(_):
+            app.is_running = False
+            return False
+        app._sleep_interruptible = stopped
+        self.assertIsNone(self.query(app))
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 1)
+
     def test_timeout_is_failure_without_overlapping_requests(self):
         app = self.app([{'status': 'TIMEOUT', 'rows': 0, 'reason': '응답 시간 초과'}])
         with self.assertRaisesRegex(RuntimeError, '조회 실패.*응답 시간 초과'):
@@ -106,7 +150,34 @@ class ErpQueryTest(unittest.TestCase):
         ]:
             with self.subTest(row=row):
                 app = self.attempt_app([self.snapshot([row])] * 10)
-                self.assertEqual(self.attempt(app)['status'], 'TIMEOUT')
+                result = self.attempt(app)
+                self.assertEqual(result['status'], 'MISMATCH')
+                self.assertIn('2026-11-15', result['reason'])
+                self.assertIn(row['startDay'], result['reason'])
+                self.assertIn('cleanup', app.driver.execute_script.call_args.args[0])
+
+    def test_mismatch_diagnostic_limits_rows_fields_and_newlines(self):
+        row = {'startDay': '20261114', 'air2Cd': 'KE',
+               'priceDesc': 'wrong\r\n' + 'x' * 300, 'basePriceSeq': 'DO_NOT_LOG_ID'}
+        app = self.attempt_app([self.snapshot([row] * 20)] * 10)
+        result = self.attempt(app)
+        self.assertEqual(result['status'], 'MISMATCH')
+        self.assertEqual(result['reason'].count('startDay'), 3)
+        self.assertNotIn('\n', result['reason'])
+        self.assertNotIn('\r', result['reason'])
+        self.assertNotIn('x' * 81, result['reason'])
+        self.assertNotIn('DO_NOT_LOG_ID', result['reason'])
+
+    def test_transient_mismatch_followed_by_unbound_snapshot_is_timeout(self):
+        wrong = self.snapshot([{'startDay': '20261114', 'air2Cd': 'LJ', 'priceDesc': '김트랑'}])
+        app = self.attempt_app([wrong] * 4 + [self.snapshot([], binds=0)] * 6)
+        self.assertEqual(self.attempt(app)['status'], 'TIMEOUT')
+
+    def test_transient_mismatch_then_correct_binding_is_match(self):
+        wrong = self.snapshot([{'startDay': '20261114', 'air2Cd': 'LJ', 'priceDesc': '김트랑'}])
+        correct = self.snapshot([{'startDay': '20261115', 'air2Cd': 'LJ', 'priceDesc': '김트랑'}])
+        app = self.attempt_app([wrong] * 2 + [correct] * 8)
+        self.assertEqual(self.attempt(app)['status'], 'MATCH')
 
     def test_http_error_is_failure_and_observer_is_cleaned(self):
         app = self.attempt_app([self.snapshot([], status=500, binds=0)])

@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.27"
+APP_VERSION = "v5.0.28"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7281,11 +7281,13 @@ class RpaGuiApp:
             )
             deadline = time.monotonic() + timeout
             stable_since = None
+            mismatch_since = None
             previous = None
             reason = '조회 응답이 제한 시간 안에 완료되지 않음'
             row_count = 0
             norm = lambda value: re.sub(r'[-./]', '', str(value or ''))[:8]
             start, end = norm(date_start), norm(date_end)
+            short = lambda value, length=80: re.sub(r'\s+', ' ', str(value or ''))[:length]
             while time.monotonic() < deadline:
                 if not self.is_running:
                     return {'status': 'STOP', 'rows': row_count}
@@ -7302,24 +7304,43 @@ class RpaGuiApp:
                             'reason': f"조회 응답 오류 (HTTP {requests[0]['status']})"}
                 bound = completed and snapshot['binds'] > 0 and snapshot['boundRows'] == row_count
                 if bound:
-                    matched = all(
-                        len(norm(row.get('startDay'))) == 8
-                        and norm(row.get('startDay')).isdigit()
-                        and start <= norm(row.get('startDay')) <= end
-                        and (not airline_code or str(row.get('air2Cd') or '') == airline_code)
-                        and (not price_desc or price_desc in str(row.get('priceDesc') or ''))
-                        for row in rows
-                    )
+                    mismatches = []
+                    for row in rows:
+                        day = norm(row.get('startDay'))
+                        if not (
+                            len(day) == 8 and day.isdigit() and start <= day <= end
+                            and (not airline_code or str(row.get('air2Cd') or '') == airline_code)
+                            and (not price_desc or price_desc in str(row.get('priceDesc') or ''))
+                        ):
+                            mismatches.append(row)
+                    matched = not mismatches
                     if matched:
+                        mismatch_since = None
                         fingerprint = json.dumps(rows, sort_keys=True, ensure_ascii=False)
                         if fingerprint != previous:
                             previous, stable_since = fingerprint, time.monotonic()
                         elif time.monotonic() - stable_since >= max(0.5, poll_interval):
                             return {'status': 'MATCH' if rows else 'EMPTY', 'rows': row_count}
                     else:
-                        reason = '조회 응답 후 그리드의 날짜·항공사·요금구분이 요청 조건과 일치하지 않음'
+                        if mismatch_since is None:
+                            mismatch_since = time.monotonic()
+                        requested = {
+                            '날짜': f'{short(date_start, 16)}~{short(date_end, 16)}',
+                            '항공사': short(airline_code, 16), '요금구분': short(price_desc),
+                        }
+                        samples = [
+                            {'startDay': short(row.get('startDay'), 16),
+                             'air2Cd': short(row.get('air2Cd'), 16),
+                             'priceDesc': short(row.get('priceDesc'))}
+                            for row in mismatches[:3]
+                        ]
+                        reason = (
+                            '조회 조건 불일치: 요청=' + json.dumps(requested, ensure_ascii=False)
+                            + ' / 불일치 행(최대 3건)=' + json.dumps(samples, ensure_ascii=False)
+                        )
                         previous, stable_since = None, None
                 else:
+                    mismatch_since = None
                     previous, stable_since = None, None
                     if completed:
                         reason = '조회 응답은 완료됐으나 이번 응답의 그리드 반영을 확인하지 못함'
@@ -7327,7 +7348,11 @@ class RpaGuiApp:
                         reason = '조회 요청 시작을 확인하지 못함'
                 if not self._sleep_interruptible(poll_interval):
                     return {'status': 'STOP', 'rows': row_count}
-            return {'status': 'TIMEOUT', 'rows': row_count, 'reason': reason}
+            status = 'MISMATCH' if (
+                mismatch_since is not None
+                and time.monotonic() - mismatch_since >= max(0.5, poll_interval)
+            ) else 'TIMEOUT'
+            return {'status': status, 'rows': row_count, 'reason': reason}
         finally:
             active_error = sys.exc_info()[0] is not None
             try:
@@ -7341,8 +7366,11 @@ class RpaGuiApp:
 
     def _query_erp_with_retry(self, selectors, date_start, date_end, airline_code,
                               price_desc, timeout, poll_interval):
-        """저장 전에만 조회한다. 완료된 빈 응답만 최대 두 번 재조회한다."""
-        max_attempts = 1 + max(0, min(2, int(self.config.get('erp_query_retries', 2))))
+        """완료된 0건은 최대 두 번, 조건 불일치는 한 번만 재조회한다."""
+        empty_retry_limit = max(0, min(2, int(self.config.get('erp_query_retries', 2))))
+        max_attempts = max(2, 1 + empty_retry_limit)
+        empty_retries = 0
+        mismatch_retried = False
         for attempt in range(1, max_attempts + 1):
             if not self.is_running:
                 return None
@@ -7364,12 +7392,21 @@ class RpaGuiApp:
             print(f" -> [조회 {attempt}/{max_attempts}] {elapsed:.1f}초 / {result.get('rows', 0)}건 / {status}")
             if status == 'MATCH':
                 return True
-            if status != 'EMPTY':
-                raise RuntimeError(f"조회 실패: {result.get('reason') or status}")
-            if attempt < max_attempts:
+            if status == 'MISMATCH':
+                print(f" -> [조회 조건 불일치] {result.get('reason')}")
+                if mismatch_retried or attempt == max_attempts:
+                    raise RuntimeError(f"조회 실패: {result.get('reason') or status}")
+                mismatch_retried = True
+                print(" -> [자동 재조회] 완료된 조회의 조건이 다릅니다. 한 번 다시 조회합니다.")
+            elif status == 'EMPTY':
+                if empty_retries == empty_retry_limit or attempt == max_attempts:
+                    return False
+                empty_retries += 1
                 print(" -> [자동 재조회] 완료된 조회가 0건입니다. 잠시 후 다시 조회합니다.")
-                if not self._sleep_interruptible(1.0):
-                    return None
+            else:
+                raise RuntimeError(f"조회 실패: {result.get('reason') or status}")
+            if not self._sleep_interruptible(1.0):
+                return None
         return False
 
     def is_grid_locked(self):
