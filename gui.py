@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.25"
+APP_VERSION = "v5.0.26"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -936,6 +936,7 @@ class RpaGuiApp:
 
         # 왼쪽 메인 컬럼
         main_col = tk.Frame(body, bg=self.bg_color)
+        self.main_col = main_col
         main_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # 1. 헤더
@@ -3177,7 +3178,8 @@ class RpaGuiApp:
         if self.panel_expanded:
             self._collapse_sheet_panel()
         else:
-            self.side_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 16), pady=16)
+            self.side_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 16), pady=16,
+                                 before=self.main_col)
             self.panel_expanded = True
             self.toggle_btn.config(text='◀ 입력표 접기')
             self.root.geometry(f'{self.expanded_width}x{self.win_height}')
