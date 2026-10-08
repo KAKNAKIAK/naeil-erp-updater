@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.24",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.24/NaeilERPUpdater_Setup_v5.0.24.exe",
-    "sha256":  "C67E4AABFFF061CD56FB922C479274F591E5F20E5A17A6797F4B618C7D21791B",
+    "version":  "v5.0.25",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.25/NaeilERPUpdater_Setup_v5.0.25.exe",
+    "sha256":  "139AE182D12634C21C36D6915CC9179D690315DB167094536A3810C0A5CFB561",
     "notes":  [
-                  "호텔비 수정 전 화면 밖에 있는 대기예약 행도 그리드 모델에서 정확히 선택하고 검증합니다.",
-                  "현재 조회의 전체 건수로 페이지 수를 계산하여 이전 조회의 페이지 정보가 남아도 잘못된 페이지를 처리하지 않습니다.",
-                  "실패 안내에 페이지별 실제 오류와 날짜/기간 단위의 부분 완료 상태를 표시합니다."
+                  "작업 목록의 조건에서 호텔명을 먼저 표시하여 대상 호텔을 바로 확인할 수 있습니다.",
+                  "호텔을 지정하지 않은 작업은 전체 호텔로 표시합니다.",
+                  "조건열 너비를 내용에 맞게 늘리고 가로 스크롤을 제공하여 긴 조건 전체를 확인할 수 있습니다."
               ]
 }

@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.24"
+APP_VERSION = "v5.0.25"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -1265,11 +1265,14 @@ class RpaGuiApp:
         self.job_tree.heading('status', text='진행상황')
         self.job_tree.heading('rows', text='건수')
         self.job_tree.heading('source', text='출처')
-        self.job_tree.column('condition', width=390, anchor=tk.W)
-        self.job_tree.column('status', width=180, anchor=tk.W)
-        self.job_tree.column('rows', width=70, anchor=tk.CENTER)
-        self.job_tree.column('source', width=150, anchor=tk.W)
+        self.job_tree.column('condition', width=620, minwidth=620, stretch=False, anchor=tk.W)
+        self.job_tree.column('status', width=180, stretch=False, anchor=tk.W)
+        self.job_tree.column('rows', width=70, stretch=False, anchor=tk.CENTER)
+        self.job_tree.column('source', width=150, stretch=False, anchor=tk.W)
         self.job_tree.pack(fill=tk.X, padx=1, pady=1)
+        job_xscroll = ttk.Scrollbar(job_body, orient=tk.HORIZONTAL, command=self.job_tree.xview)
+        job_xscroll.pack(fill=tk.X)
+        self.job_tree.configure(xscrollcommand=job_xscroll.set)
 
         job_btn_row = tk.Frame(job_card, bg=self.card_color)
         job_btn_row.pack(fill=tk.X, padx=10, pady=(6, 8))
@@ -4010,7 +4013,7 @@ class RpaGuiApp:
             return True
         return cls._normalize_hotel_name_for_match(actual) == expected_norm
 
-    def _job_condition_text(self, job):
+    def _job_condition_text(self, job, hotel_first=False):
         price_desc = str(job.get('price_desc') or '').strip() or '전체 요금구분'
         airline = str(job.get('airline_code') or '').strip() or '전체 항공사'
         departure_flight = str(job.get('departure_flight') or '').strip() or '전체 출발편'
@@ -4018,6 +4021,8 @@ class RpaGuiApp:
         hotel_seq = str(job.get('hotel_seq') or '').strip()
         hotel_seq_strict = bool(self._bool_flag(job.get('hotel_seq_strict')) and hotel_seq)
         parts = [f'요금구분 : {price_desc}', f'항공사 : {airline}', f'출발편 : {departure_flight}']
+        if hotel_first:
+            return ' / '.join([f"호텔명 : {hotel_name or '전체 호텔'}"] + parts)
         if hotel_name:
             hotel_label = f'{hotel_name} (hotelSeq {hotel_seq})' if hotel_seq_strict else hotel_name
             parts.append(f'호텔명 : {hotel_label}')
@@ -4169,17 +4174,22 @@ class RpaGuiApp:
         for item in self.job_tree.get_children():
             self.job_tree.delete(item)
         total_rows = 0
+        condition_width = 620
         for idx, raw_job in enumerate(self.job_queue, start=1):
             job = raw_job
             row_count = len(job.get('rows') or [])
             total_rows += row_count
-            condition = f"{idx}. {self._job_condition_text(job)}"
+            condition = f"{idx}. {self._job_condition_text(job, hotel_first=True)}"
+            condition_width = max(condition_width, int(self.job_tree.tk.call(
+                'font', 'measure', 'TkDefaultFont', condition,
+            )) + 24)
             self.job_tree.insert(
                 '',
                 tk.END,
                 iid=str(idx - 1),
                 values=(condition, self._job_status_text(job), f'{row_count}건', job.get('source') or '수동'),
             )
+        self.job_tree.column('condition', width=condition_width)
         if hasattr(self, 'job_queue_summary_lbl'):
             if self.job_queue:
                 self.job_queue_summary_lbl.config(text=f'{len(self.job_queue)}개 작업 · {total_rows}건')
