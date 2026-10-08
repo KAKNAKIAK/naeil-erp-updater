@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.26"
+APP_VERSION = "v5.0.27"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7201,6 +7201,177 @@ class RpaGuiApp:
 
         return False
 
+    def _wait_for_erp_query_attempt(self, selectors, date_start, date_end,
+                                    airline_code, price_desc, timeout, poll_interval):
+        """이번 클릭의 XHR 완료와 이번 응답의 grid 바인딩을 함께 확인한다."""
+        grid_id = self.config.get('grid_id', '#gridMain')
+        # 요청 URL/본문/응답/인증정보를 수집하지 않는다. 클릭 중 시작한 요청만 관찰한다.
+        arm_js = """
+            if (window.__naeilFareQuery) throw new Error('query observer already active');
+            if (typeof AUIGrid === 'undefined' || typeof AUIGrid.setGridData !== 'function')
+                throw new Error('grid binding observer unavailable');
+            const state = {clicking:false, requests:[], binds:0, boundRows:null};
+            const oldSend = XMLHttpRequest.prototype.send;
+            const oldBind = AUIGrid.setGridData;
+            const normalize = id => String(id).replace(/^#/, '');
+            const target = normalize(arguments[0]);
+            state.send = function() {
+                if (state.clicking) {
+                    const req = {xhr:this, done:false, status:null};
+                    req.finish = () => {req.done=true; req.status=this.status;};
+                    this.addEventListener('loadend', req.finish, {once:true});
+                    state.requests.push(req);
+                }
+                return oldSend.apply(this, arguments);
+            };
+            state.bind = function() {
+                const result = oldBind.apply(this, arguments);
+                // 조회 전 clearGridData/빈 바인딩은 완료된 응답으로 인정하지 않는다.
+                if (normalize(arguments[0]) === target && state.requests.length === 1 &&
+                    state.requests[0].xhr.readyState === 4 &&
+                    state.requests[0].xhr.status >= 200 && state.requests[0].xhr.status < 300) {
+                    state.binds++;
+                    state.boundRows = Array.isArray(arguments[1]) ? arguments[1].length : null;
+                }
+                return result;
+            };
+            state.cleanup = () => {
+                let abortFailed = false;
+                try {
+                    state.requests.forEach(req => {
+                        if (!req.done && req.xhr.readyState !== 4) {
+                            try {
+                                req.xhr.abort();
+                                if (req.xhr.readyState !== 0 && req.xhr.readyState !== 4) abortFailed=true;
+                            } catch (error) { abortFailed=true; }
+                        }
+                    });
+                } finally {
+                    if (XMLHttpRequest.prototype.send === state.send) XMLHttpRequest.prototype.send=oldSend;
+                    if (AUIGrid.setGridData === state.bind) AUIGrid.setGridData=oldBind;
+                    state.requests.forEach(req => req.xhr.removeEventListener('loadend', req.finish));
+                    delete window.__naeilFareQuery;
+                }
+                if (abortFailed) throw new Error('query request cancellation unverified');
+            };
+            window.__naeilFareQuery=state;
+            XMLHttpRequest.prototype.send=state.send;
+            AUIGrid.setGridData=state.bind;
+            if (XMLHttpRequest.prototype.send !== state.send || AUIGrid.setGridData !== state.bind) {
+                state.cleanup(); throw new Error('query observer installation failed');
+            }
+        """
+        read_js = """
+            const state = window.__naeilFareQuery;
+            if (!state) throw new Error('query observer missing');
+            const requests = state.requests.map(req => ({done:req.done, status:req.status}));
+            const rows = AUIGrid.getGridData(arguments[0]);
+            if (!Array.isArray(rows)) throw new Error('grid data unavailable');
+            return {requests, binds:state.binds, boundRows:state.boundRows,
+                rows:rows.map(row => ({startDay:row.startDay, air2Cd:row.air2Cd,
+                    priceDesc:row.priceDesc, basePriceSeq:row.basePriceSeq}))};
+        """
+        cleanup_js = "if (window.__naeilFareQuery) window.__naeilFareQuery.cleanup();"
+        self.driver.execute_script(arm_js, grid_id)
+        try:
+            button = self.driver.find_element(By.CSS_SELECTOR, selectors['search_button'])
+            self.driver.execute_script(
+                "const s=window.__naeilFareQuery; s.clicking=true; "
+                "try {arguments[0].click();} finally {s.clicking=false;}", button,
+            )
+            deadline = time.monotonic() + timeout
+            stable_since = None
+            previous = None
+            reason = '조회 응답이 제한 시간 안에 완료되지 않음'
+            row_count = 0
+            norm = lambda value: re.sub(r'[-./]', '', str(value or ''))[:8]
+            start, end = norm(date_start), norm(date_end)
+            while time.monotonic() < deadline:
+                if not self.is_running:
+                    return {'status': 'STOP', 'rows': row_count}
+                snapshot = self.driver.execute_script(read_js, grid_id)
+                requests = snapshot['requests']
+                rows = snapshot['rows']
+                row_count = len(rows)
+                if len(requests) > 1:
+                    return {'status': 'ERROR', 'rows': row_count,
+                            'reason': '조회 요청을 하나로 식별하지 못함'}
+                completed = len(requests) == 1 and requests[0]['done']
+                if completed and not 200 <= int(requests[0]['status'] or 0) < 300:
+                    return {'status': 'ERROR', 'rows': row_count,
+                            'reason': f"조회 응답 오류 (HTTP {requests[0]['status']})"}
+                bound = completed and snapshot['binds'] > 0 and snapshot['boundRows'] == row_count
+                if bound:
+                    matched = all(
+                        len(norm(row.get('startDay'))) == 8
+                        and norm(row.get('startDay')).isdigit()
+                        and start <= norm(row.get('startDay')) <= end
+                        and (not airline_code or str(row.get('air2Cd') or '') == airline_code)
+                        and (not price_desc or price_desc in str(row.get('priceDesc') or ''))
+                        for row in rows
+                    )
+                    if matched:
+                        fingerprint = json.dumps(rows, sort_keys=True, ensure_ascii=False)
+                        if fingerprint != previous:
+                            previous, stable_since = fingerprint, time.monotonic()
+                        elif time.monotonic() - stable_since >= max(0.5, poll_interval):
+                            return {'status': 'MATCH' if rows else 'EMPTY', 'rows': row_count}
+                    else:
+                        reason = '조회 응답 후 그리드의 날짜·항공사·요금구분이 요청 조건과 일치하지 않음'
+                        previous, stable_since = None, None
+                else:
+                    previous, stable_since = None, None
+                    if completed:
+                        reason = '조회 응답은 완료됐으나 이번 응답의 그리드 반영을 확인하지 못함'
+                    elif not requests:
+                        reason = '조회 요청 시작을 확인하지 못함'
+                if not self._sleep_interruptible(poll_interval):
+                    return {'status': 'STOP', 'rows': row_count}
+            return {'status': 'TIMEOUT', 'rows': row_count, 'reason': reason}
+        finally:
+            active_error = sys.exc_info()[0] is not None
+            try:
+                self.driver.execute_script(cleanup_js)
+            except Exception:
+                # 미완료 요청이 남은 상태에서 다음 날짜를 조회하지 않는다.
+                self.is_running = False
+                if not active_error:
+                    raise
+                print(" -> [조회 실패] 미완료 조회 취소·감시 해제를 확인하지 못해 전체 작업을 중단합니다.")
+
+    def _query_erp_with_retry(self, selectors, date_start, date_end, airline_code,
+                              price_desc, timeout, poll_interval):
+        """저장 전에만 조회한다. 완료된 빈 응답만 최대 두 번 재조회한다."""
+        max_attempts = 1 + max(0, min(2, int(self.config.get('erp_query_retries', 2))))
+        for attempt in range(1, max_attempts + 1):
+            if not self.is_running:
+                return None
+            started = time.monotonic()
+            print(f" -> [조회 {attempt}/{max_attempts}] 조회 요청·완료 및 조건을 확인합니다.")
+            try:
+                result = self._wait_for_erp_query_attempt(
+                    selectors, date_start, date_end, airline_code, price_desc,
+                    timeout, poll_interval,
+                )
+            except Exception as error:
+                elapsed = time.monotonic() - started
+                print(f" -> [조회 {attempt}/{max_attempts}] {elapsed:.1f}초 / 건수 확인 불가 / 조회 실패 ({type(error).__name__})")
+                raise RuntimeError(f"조회 실패: {type(error).__name__}") from error
+            elapsed = time.monotonic() - started
+            if not self.is_running or result.get('status') == 'STOP':
+                return None
+            status = result.get('status')
+            print(f" -> [조회 {attempt}/{max_attempts}] {elapsed:.1f}초 / {result.get('rows', 0)}건 / {status}")
+            if status == 'MATCH':
+                return True
+            if status != 'EMPTY':
+                raise RuntimeError(f"조회 실패: {result.get('reason') or status}")
+            if attempt < max_attempts:
+                print(" -> [자동 재조회] 완료된 조회가 0건입니다. 잠시 후 다시 조회합니다.")
+                if not self._sleep_interruptible(1.0):
+                    return None
+        return False
+
     def is_grid_locked(self):
         mask_selector = ".aui-grid-mask, .aui-grid-loading, .aui-grid-loading-loading"
         for mask in self.driver.find_elements(By.CSS_SELECTOR, mask_selector):
@@ -7925,62 +8096,21 @@ class RpaGuiApp:
                     elif index == 0:
                         print(" -> 호텔명 필터 초기화: 전체 호텔 대상")
 
-                    search_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["search_button"])
-                    self.driver.execute_script("arguments[0].click();", search_btn)
-                    print(" -> 조회 버튼을 클릭했습니다. 조회 데이터 로딩 대기 중...")
-
-                    wait = WebDriverWait(self.driver, driver_timeout, poll_frequency=erp_poll_interval)
-                    norm_date = date_val.replace('-', '').replace('.', '').replace('/', '')
-                    norm_date_end = date_end_val.replace('-', '').replace('.', '').replace('/', '')
-                    # 조회 완료 판정: AUIGrid 데이터 모델의 startDay(출발일)로 판정한다.
-                    # (구버전은 .aui-grid-default-column DOM 텍스트에서 날짜 형태를 모두 긁어
-                    #  범위 검사했는데, 한 행에 출발일 외 부가 날짜 컬럼이 섞여 있으면 단일일/
-                    #  좁은 기간 조회에서 그 부가 날짜가 범위를 벗어나 '조회결과 없음'으로 잘못
-                    #  건너뛰는 false negative가 있었다. 데이터 모델의 startDay만 보면 해결되고,
-                    #  행 바인딩 지연도 폴링으로 흡수된다.)
-                    grid_id = self.config.get('grid_id', '#gridMain')
-                    start_day_js = (
-                        "try {"
-                        "  var a = (typeof AUIGrid!=='undefined') ? AUIGrid.getGridData(arguments[0]) : null;"
-                        "  if (!a) return null;"
-                        "  var out = [];"
-                        "  for (var i=0;i<a.length;i++){ out.push(String(a[i].startDay==null?'':a[i].startDay)); }"
-                        "  return out;"
-                        "} catch(e){ return null; }"
+                    matched = self._query_erp_with_retry(
+                        selectors, date_val, date_end_val, airline_code, price_desc,
+                        driver_timeout, erp_poll_interval,
                     )
-                    matched = False
-                    deadline = time.time() + driver_timeout
-
-                    while time.time() < deadline:
-                        if not self.is_running:
-                            break
-
-                        try:
-                            start_days = self.driver.execute_script(start_day_js, grid_id)
-                        except Exception:
-                            start_days = None
-
-                        if start_days:
-                            norm_days = [
-                                str(s).replace('-', '').replace('.', '').replace('/', '')[:8]
-                                for s in start_days if s
-                            ]
-                            if norm_days and all(norm_date <= d <= norm_date_end for d in norm_days):
-                                matched = True
-                                break
-                        if not self._sleep_interruptible(erp_poll_interval):
-                            break
-
-                    if not self.is_running:
+                    if matched is None or not self.is_running:
                         print(" -> [중단] 사용자 중지로 조회를 멈춥니다.")
                         break
-
                     if not matched:
-                        print(f" -> [조회결과 없음] {date_log_str} 일자 데이터를 반영하지 못했습니다. ERP에서 직접 날짜 조회를 확인해 주세요.")
+                        print(f" -> [조회결과 없음] {date_log_str}: 완료된 조회를 재확인했으나 0건입니다.")
                         rpa_history.append({"date": history_date_str, "status": "SKIP", "error": "조회결과 없음"})
                         self._set_job_progress_ui(job_index, result_status='SKIP')
                         self.update_progress_ui(index + 1, total_items)
                         continue
+                    wait = WebDriverWait(self.driver, driver_timeout, poll_frequency=erp_poll_interval)
+                    grid_id = self.config.get('grid_id', '#gridMain')
 
                     if hotel_name:
                         expected_hotel_name = str(hotel_result.get('value') or hotel_name).strip()

@@ -1,9 +1,11 @@
 {
-    "version":  "v5.0.26",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.26/NaeilERPUpdater_Setup_v5.0.26.exe",
-    "sha256":  "7FD7E429F9EA35DF035C191468DE5A184EBF44B2C89DF260FC0C54B1B1177CD4",
-    "notes":  [
-                  "긴 호텔명이나 상태 문구가 표시되어도 요금 입력표의 기존 너비를 유지합니다.",
-                  "입력표 공간을 먼저 확보하여 긴 조건 때문에 오른쪽 입력표가 좁아지는 문제를 수정했습니다."
-              ]
+    "version": "v5.0.27",
+    "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.27/NaeilERPUpdater_Setup_v5.0.27.exe",
+    "sha256": "0D3FE965C9131444D52423F08D83E8CA1A4CC39C7A9BE081B8F8760845039805",
+    "notes": [
+        "조회 요청 완료와 그리드 반영·날짜·항공사·요금구분을 확인한 뒤 요금을 수정합니다.",
+        "완료된 조회가 0건이면 최대 2회 자동 재조회합니다.",
+        "응답 지연·오류·조건 불일치는 조회결과 없음과 구분하여 조회 실패로 표시합니다.",
+        "중지·조회 실패 시 미완료 요청을 취소해 다음 날짜의 조회와 겹치지 않게 합니다."
+    ]
 }
