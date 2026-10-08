@@ -1,10 +1,10 @@
 {
-    "version":  "v5.0.23",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.23/NaeilERPUpdater_Setup_v5.0.23.exe",
-    "sha256":  "A2983A97B7FE2629139C725035B800E8A3B05F92A488290F49C79DD76398FE44",
+    "version":  "v5.0.24",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.24/NaeilERPUpdater_Setup_v5.0.24.exe",
+    "sha256":  "C67E4AABFFF061CD56FB922C479274F591E5F20E5A17A6797F4B618C7D21791B",
     "notes":  [
-                  "편집 중 바로 시작해도 셀과 수식 입력줄의 예약마감, 요금, 수식 입력을 먼저 확정합니다.",
-                  "500건을 넘는 조회에서 페이지 이동 재시도가 이전 페이지 행을 새 페이지로 오인하는 문제를 수정했습니다.",
-                  "진행구분 변경이나 임시 행 ID 때문에 페이지 이동 검증이 흔들리지 않도록 개선했습니다."
+                  "호텔비 수정 전 화면 밖에 있는 대기예약 행도 그리드 모델에서 정확히 선택하고 검증합니다.",
+                  "현재 조회의 전체 건수로 페이지 수를 계산하여 이전 조회의 페이지 정보가 남아도 잘못된 페이지를 처리하지 않습니다.",
+                  "실패 안내에 페이지별 실제 오류와 날짜/기간 단위의 부분 완료 상태를 표시합니다."
               ]
 }

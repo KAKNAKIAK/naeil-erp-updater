@@ -1,4 +1,7 @@
 import unittest
+import json
+import shutil
+import subprocess
 from unittest import mock
 
 from gui import RpaGuiApp
@@ -333,7 +336,7 @@ class GridPagingTest(unittest.TestCase):
         self.assertEqual(total_pages, 2)
         self.assertTrue(next_vis)
 
-        # When tot_rows <= 500 (e.g. 450) but next_visible is True, total_pages should be at least 2
+        # Current totRows overrides stale paging controls from the previous query.
         snap_partial_with_next = {
             'cur': 1,
             'page_rows': 450,
@@ -348,8 +351,79 @@ class GridPagingTest(unittest.TestCase):
         cur, total_pages, tot, next_vis = RpaGuiApp.get_grid_page_state(app, timeout=0.0)
 
         self.assertEqual(cur, 1)
-        self.assertEqual(total_pages, 2)
+        self.assertEqual(total_pages, 1)
         self.assertTrue(next_vis)
+
+    def test_current_total_overrides_previous_query_paging(self):
+        for total, expected in [(16, 1), (40, 1), (800, 2), (1123, 3)]:
+            with self.subTest(total=total):
+                app = mock.MagicMock()
+                app.is_running = True
+                app.config = {'grid_page_size': 500}
+                app.get_grid_page_snapshot.return_value = {
+                    'cur': 1, 'page_rows': min(total, 500), 'tot_rows': total,
+                    'tot_rows_ready': True, 'declared_total_pages': 8,
+                    'next_visible': True, 'fingerprint': 'current-query',
+                }
+                self.assertEqual(RpaGuiApp.get_grid_page_state(app)[1], expected)
+
+    def test_pending_row_selection_uses_model_for_offscreen_row(self):
+        app = mock.MagicMock()
+        app.config = {'grid_id': '#gridMain'}
+        app._current_page_progress_rows.return_value = [
+            {'procCd': '06' if i == 172 else '04'} for i in range(500)
+        ]
+        app.driver.execute_script.side_effect = [{'ok': True, 'selected': [172]}, 1]
+        with mock.patch('gui.time.sleep'):
+            self.assertEqual(RpaGuiApp._select_current_page_rows_by_progress_status(
+                app, {}, '06', 0, 0.1,
+            ), 1)
+        selection_call = app.driver.execute_script.call_args_list[0]
+        self.assertEqual(selection_call.args[1:], ('#gridMain', [172], '06'))
+        self.assertIn('AUIGrid.setCheckedRowsByValue', selection_call.args[0])
+        self.assertNotIn('document.querySelectorAll', selection_call.args[0])
+
+    def test_pending_row_selection_fails_before_modal_on_wrong_selection(self):
+        app = mock.MagicMock()
+        app.config = {}
+        app._current_page_progress_rows.return_value = [{'procCd': '06'}]
+        app.driver.execute_script.return_value = {
+            'ok': False, 'reason': 'target_rows_not_checked', 'selected': [1],
+        }
+        with self.assertRaisesRegex(RuntimeError, 'target_rows_not_checked'):
+            RpaGuiApp._select_current_page_rows_by_progress_status(app, {}, '06', 0, 0.1)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for grid JavaScript regression')
+    def test_pending_selection_javascript_virtual_rows_and_disabled_policy(self):
+        app = mock.MagicMock()
+        app.config = {}
+        app._current_page_progress_rows.return_value = [{'procCd': '06'}]
+        app.driver.execute_script.return_value = {'ok': False, 'reason': 'capture'}
+        with self.assertRaises(RuntimeError):
+            RpaGuiApp._select_current_page_rows_by_progress_status(app, {}, '06', 0, 0.1)
+        script = app.driver.execute_script.call_args.args[0]
+        harness = """
+        const select = new Function(SCRIPT);
+        const rows = Array.from({length:500}, (_,i)=>({procCd:i===172?'06':'04'}));
+        let checked = [{rowIndex:0,item:rows[0]}], blocked = false, calls = 0;
+        global.AUIGrid = {
+          getGridData:()=>rows,
+          getCheckedRowItems:()=>checked,
+          getProp:(_,name)=>name==='rowCheckDisabledFunction'?(()=>!blocked):null,
+          setCheckedRowsByValue:(_,field,value)=>{
+            calls++; checked=rows.flatMap((item,rowIndex)=>item[field]===value?[{rowIndex,item}]:[]);
+          }
+        };
+        const first=select('#gridMain',[172],'06');
+        if(!first.ok || first.selected[0]!==172 || checked.length!==1) throw Error('offscreen selection failed');
+        blocked=true;
+        const second=select('#gridMain',[172],'06');
+        if(second.ok || second.reason!=='target_row_not_selectable' || calls!==1) throw Error('disabled policy bypassed');
+        blocked=false; AUIGrid.setCheckedRowsByValue=()=>{checked=[{rowIndex:0,item:rows[0]}]};
+        if(select('#gridMain',[172],'06').ok) throw Error('incorrect selected row accepted');
+        """.replace('SCRIPT', json.dumps(script))
+        result = subprocess.run([shutil.which('node'), '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_get_grid_page_state_fails_closed_when_page_count_never_arrives(self):
         app = mock.MagicMock()
@@ -370,7 +444,7 @@ class GridPagingTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '전체 페이지 수를 확인하지 못했습니다'):
             RpaGuiApp.get_grid_page_state(app, timeout=0.02, poll_interval=0.01)
 
-    def test_get_grid_page_state_uses_larger_declared_page_count(self):
+    def test_get_grid_page_state_ignores_stale_larger_declared_page_count(self):
         app = mock.MagicMock()
         app.is_running = True
         app.config = {'grid_page_size': 500}
@@ -394,7 +468,7 @@ class GridPagingTest(unittest.TestCase):
         )
 
         self.assertEqual(cur, 1)
-        self.assertEqual(total_pages, 3)
+        self.assertEqual(total_pages, 1)
         self.assertEqual(tot, 500)
         self.assertTrue(next_vis)
 

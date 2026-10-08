@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.23"
+APP_VERSION = "v5.0.24"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7000,44 +7000,41 @@ class RpaGuiApp:
         if not target_indexes:
             return 0
 
-        row_checkbox_selector = selectors.get(
-            'row_checkbox',
-            'td.aui-grid-row-check-column input',
-        )
+        grid_id = self.config.get('grid_id', '#gridMain')
         result = self.driver.execute_script(
             """
-            const selector = arguments[0];
+            const gridId = arguments[0];
             const targetIndexes = arguments[1] || [];
-            const checkboxes = Array.from(document.querySelectorAll(selector));
-            if (!checkboxes.length) {
-                return {ok: false, reason: 'row_checkbox_not_found', targetIndexes};
+            if (typeof AUIGrid === 'undefined' ||
+                typeof AUIGrid.setCheckedRowsByValue !== 'function' ||
+                typeof AUIGrid.getCheckedRowItems !== 'function' ||
+                typeof AUIGrid.getProp !== 'function') {
+                return {ok: false, reason: 'grid_check_api_not_available'};
             }
-
-            // 이전 작업에서 남은 선택값을 먼저 비운다. disabled 행은 ERP가 관리하므로 건드리지 않는다.
-            checkboxes.forEach((checkbox) => {
-                if (!checkbox.disabled && checkbox.checked) {
-                    checkbox.click();
-                }
-            });
-
-            const selected = [];
+            const rows = AUIGrid.getGridData(gridId);
+            const previous = AUIGrid.getCheckedRowItems(gridId).map(row => Number(row.rowIndex));
+            const checkable = AUIGrid.getProp(gridId, 'rowCheckableFunction');
+            const enabled = AUIGrid.getProp(gridId, 'rowCheckDisabledFunction');
             for (const index of targetIndexes) {
-                const checkbox = checkboxes.find((item) => String(item.value) === String(index)) || checkboxes[index];
-                if (!checkbox || checkbox.disabled) {
-                    return {ok: false, reason: 'target_row_not_selectable', index, targetIndexes};
+                const row = rows[index];
+                if (!row || String(row.procCd || '').trim() !== arguments[2] ||
+                    (typeof checkable === 'function' && checkable(index, previous.includes(index), row) === false) ||
+                    (typeof enabled === 'function' && enabled(index, previous.includes(index), row) === false)) {
+                    return {ok: false, reason: 'target_row_not_selectable', index};
                 }
-                if (!checkbox.checked) {
-                    checkbox.click();
-                }
-                if (!checkbox.checked) {
-                    return {ok: false, reason: 'target_row_not_checked', index, targetIndexes};
-                }
-                selected.push(index);
             }
-            return {ok: true, selected, available: checkboxes.length};
+            // DOM에는 스크롤 영역의 일부 행만 존재하므로 그리드 모델에서 선택한다.
+            AUIGrid.setCheckedRowsByValue(gridId, 'procCd', arguments[2]);
+            const checkedRows = AUIGrid.getCheckedRowItems(gridId);
+            const selected = checkedRows.map(row => Number(row.rowIndex));
+            const ok = selected.length === targetIndexes.length &&
+                selected.every(index => targetIndexes.includes(index)) &&
+                checkedRows.every(row => String(row.item.procCd || '').trim() === arguments[2]);
+            return {ok, selected, reason: ok ? '' : 'target_rows_not_checked'};
             """,
-            row_checkbox_selector,
+            grid_id,
             target_indexes,
+            str(source_progress_code or '').strip(),
         ) or {}
         if not result.get('ok'):
             raise RuntimeError(
@@ -7049,10 +7046,13 @@ class RpaGuiApp:
         wait.until(
             lambda d: int(d.execute_script(
                 """
-                return Array.from(document.querySelectorAll(arguments[0]))
-                    .filter((checkbox) => checkbox.checked).length;
+                const selected = AUIGrid.getCheckedRowItems(arguments[0]).map(row => Number(row.rowIndex));
+                const expected = arguments[1];
+                return selected.length === expected.length && selected.every(index => expected.includes(index))
+                    ? selected.length : -1;
                 """,
-                row_checkbox_selector,
+                grid_id,
+                target_indexes,
             ) or 0) == expected_count
         )
         time.sleep(erp_short_pause)
@@ -7444,10 +7444,8 @@ class RpaGuiApp:
 
         if tot_ready and tot > 0:
             total_pages = max(1, -(-tot // page_size))  # ceil(tot / page_size)
-            if declared_pages > 0:
-                total_pages = max(total_pages, declared_pages)
-            if next_visible:
-                total_pages = max(total_pages, max(2, cur + 1))
+            # 조회 직후 totalPage/다음 버튼에는 직전 조회값이 남을 수 있다.
+            # 현재 행에 담긴 전체 건수를 우선하며 오래된 UI로 페이지를 늘리지 않는다.
         elif declared_pages > 0:
             total_pages = max(1, declared_pages)
             tot = page_rows if total_pages == 1 else 0
@@ -8058,6 +8056,7 @@ class RpaGuiApp:
                     target_page = 1
                     pages_done = 0
                     pages_failed = []
+                    page_errors = []
                     pages_price_skipped_all_closed = 0
 
                     while target_page <= total_pages:
@@ -8176,6 +8175,7 @@ class RpaGuiApp:
                                 print(f" -> [저장 완료] {date_log_str} {target_page}/{total_pages}페이지")
                         else:
                             pages_failed.append(target_page)
+                            page_errors.append(f"{target_page}페이지: {(page_err or '페이지 처리 실패')[:500]}")
                             print(f" -> [페이지 실패] {date_log_str} {target_page}/{total_pages}페이지 — {page_max_retries}회 시도 모두 실패")
 
                         target_page += 1
@@ -8191,7 +8191,7 @@ class RpaGuiApp:
                         msg = (
                             f"{total_pages}페이지 중 {len(pages_failed)}개 페이지 저장 실패"
                             f"(실패 페이지: {failed_str} / 성공 {pages_done}페이지). "
-                            f"서버 지연 등 일시 오류일 수 있으니 이 날짜를 다시 실행해 주세요."
+                            f"오류: {' / '.join(page_errors)}. ERP에서 확인 후 해당 구간을 다시 실행해 주세요."
                         )
                         print(f" -> [부분 실패] {date_log_str}: {msg}")
                         rpa_history.append({"date": history_date_str, "status": "FAIL", "error": msg})
@@ -8249,10 +8249,10 @@ class RpaGuiApp:
         failed_items = list(failed_items or [])
         fail_cnt = len(failed_items)
         lines = [
-            f"전체 {total_cnt}일 중 {fail_cnt}일이 수정되지 않았습니다.",
-            f"(성공 {success_cnt}일 / 실패·스킵 {fail_cnt}일)",
+            f"전체 {total_cnt}개 날짜/기간 중 {fail_cnt}개 작업이 완료되지 않았습니다.",
+            f"(성공 {success_cnt}개 / 실패·스킵 {fail_cnt}개)",
             "",
-            "아래 날짜는 요금이 반영되지 않았습니다.",
+            "아래 날짜/기간은 일부 또는 전체 작업이 완료되지 않았습니다.",
             "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.",
             "",
         ]

@@ -810,8 +810,8 @@ class FareEngineTest(unittest.TestCase):
 
         message = RpaGuiApp._format_failed_update_message(1157, 1081, failed_items)
 
-        self.assertIn("전체 1157일 중 2일이 수정되지 않았습니다.", message)
-        self.assertIn("성공 1081일 / 실패·스킵 2일", message)
+        self.assertIn("전체 1157개 날짜/기간 중 2개 작업이 완료되지 않았습니다.", message)
+        self.assertIn("성공 1081개 / 실패·스킵 2개", message)
         self.assertIn("나트랑 / 항공사: VN / 2027-03-01", message)
         self.assertIn("조회결과 없음", message)
         self.assertIn("다낭 / 항공사: 7C / 2027-03-02", message)
