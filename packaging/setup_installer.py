@@ -28,7 +28,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v5.0.28"
+APP_VERSION = "v5.0.31"
 
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"

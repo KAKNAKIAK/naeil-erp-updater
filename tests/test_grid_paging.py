@@ -48,6 +48,7 @@ class GridPagingTest(unittest.TestCase):
     @staticmethod
     def _navigation_app_with_clock():
         app = mock.MagicMock()
+        app._wait_for_erp_query_attempt.return_value = {'status': 'MATCH'}
         app.is_running = True
         app.config = {'paging_search_button': '#gridMain_r'}
         app._float_config = lambda *args: 0.25
@@ -79,7 +80,7 @@ class GridPagingTest(unittest.TestCase):
                     app, {'search_date_input': '#date'}, target_page=2, timeout=2.0,
                 )
 
-        self.assertEqual(app.driver.execute_script.call_count, 3)
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 3)
 
     def test_retry_waits_for_late_target_rows(self):
         app, clock = self._navigation_app_with_clock()
@@ -101,7 +102,7 @@ class GridPagingTest(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertGreaterEqual(clock[0], 3.5)
-        self.assertEqual(app.driver.execute_script.call_count, 2)
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 2)
 
     def test_stop_during_stale_retry_does_not_navigate_again(self):
         app, clock = self._navigation_app_with_clock()
@@ -129,7 +130,7 @@ class GridPagingTest(unittest.TestCase):
             )
 
         self.assertFalse(result)
-        self.assertEqual(app.driver.execute_script.call_count, 1)
+        self.assertEqual(app._wait_for_erp_query_attempt.call_count, 1)
 
     def test_get_grid_page_snapshot_from_driver(self):
         app = mock.MagicMock()
@@ -174,6 +175,7 @@ class GridPagingTest(unittest.TestCase):
 
     def test_navigate_to_grid_page_rejects_stale_fingerprint_and_fails(self):
         app = mock.MagicMock()
+        app._wait_for_erp_query_attempt.return_value = {'status': 'MATCH'}
         app.is_running = True
         app.config = {'paging_search_button': '#gridMain_r'}
         app._float_config = lambda key, default, *args: 0.01
@@ -200,6 +202,7 @@ class GridPagingTest(unittest.TestCase):
 
     def test_navigate_to_grid_page_succeeds_on_new_fingerprint_stabilization(self):
         app = mock.MagicMock()
+        app._wait_for_erp_query_attempt.return_value = {'status': 'MATCH'}
         app.is_running = True
         app.config = {'paging_search_button': '#gridMain_r'}
         app._float_config = lambda key, default, *args: 0.01
@@ -245,6 +248,7 @@ class GridPagingTest(unittest.TestCase):
 
     def test_navigate_to_grid_page_same_target_page_reverification(self):
         app = mock.MagicMock()
+        app._wait_for_erp_query_attempt.return_value = {'status': 'MATCH'}
         app.is_running = True
         app.config = {'paging_search_button': '#gridMain_r'}
         app._float_config = lambda key, default, *args: 0.01
@@ -379,7 +383,7 @@ class GridPagingTest(unittest.TestCase):
                 app, {}, '06', 0, 0.1,
             ), 1)
         selection_call = app.driver.execute_script.call_args_list[0]
-        self.assertEqual(selection_call.args[1:], ('#gridMain', [172], '06'))
+        self.assertEqual(selection_call.args[1:], ('#gridMain', [172], '06', ''))
         self.assertIn('AUIGrid.setCheckedRowsByValue', selection_call.args[0])
         self.assertNotIn('document.querySelectorAll', selection_call.args[0])
 

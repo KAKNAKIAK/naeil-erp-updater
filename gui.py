@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.28"
+APP_VERSION = "v5.0.31"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -7002,12 +7002,13 @@ class RpaGuiApp:
         )
 
     def _select_current_page_rows_by_progress_status(self, selectors, source_progress_code,
-                                                      erp_short_pause, erp_poll_interval):
-        """현재 페이지에서 source 진행구분 행만 선택한다."""
+                                                      erp_short_pause, erp_poll_interval,
+                                                      target_progress_code=None):
+        """ERP 선택 정책을 따르되 목표 상태가 아닌 대상 행의 누락을 막는다."""
         rows = self._current_page_progress_rows()
         target_indexes = [
             index for index, row in enumerate(rows)
-            if str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
+            if source_progress_code is None or str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
         ]
         if not target_indexes:
             return 0
@@ -7027,33 +7028,48 @@ class RpaGuiApp:
             const previous = AUIGrid.getCheckedRowItems(gridId).map(row => Number(row.rowIndex));
             const checkable = AUIGrid.getProp(gridId, 'rowCheckableFunction');
             const enabled = AUIGrid.getProp(gridId, 'rowCheckDisabledFunction');
+            const required = targetIndexes.filter(index => arguments[2] !== null ||
+                String((rows[index] || {}).procCd || '').trim() !== arguments[3]);
             for (const index of targetIndexes) {
                 const row = rows[index];
-                if (!row || String(row.procCd || '').trim() !== arguments[2] ||
-                    (typeof checkable === 'function' && checkable(index, previous.includes(index), row) === false) ||
-                    (typeof enabled === 'function' && enabled(index, previous.includes(index), row) === false)) {
+                if (!row || (arguments[2] !== null && String(row.procCd || '').trim() !== arguments[2]) ||
+                    (required.includes(index) && typeof checkable === 'function' && checkable(index, previous.includes(index), row) === false) ||
+                    (required.includes(index) && typeof enabled === 'function' && enabled(index, previous.includes(index), row) === false)) {
                     return {ok: false, reason: 'target_row_not_selectable', index};
                 }
             }
             // DOM에는 스크롤 영역의 일부 행만 존재하므로 그리드 모델에서 선택한다.
-            AUIGrid.setCheckedRowsByValue(gridId, 'procCd', arguments[2]);
+            if (arguments[2] === null) {
+                if (typeof AUIGrid.setCheckedRowsByIds !== 'function')
+                    return {ok:false, reason:'grid_id_check_api_not_available'};
+                const ids = required.map(index => rows[index].basePriceSeq);
+                if (ids.some(id => id === undefined || id === null || String(id).trim() === '' || String(id).trim() === '0') ||
+                    new Set(ids.map(String)).size !== ids.length)
+                    return {ok:false, reason:'target_row_id_invalid'};
+                AUIGrid.setCheckedRowsByIds(gridId, ids);
+            } else AUIGrid.setCheckedRowsByValue(gridId, 'procCd', arguments[2]);
             const checkedRows = AUIGrid.getCheckedRowItems(gridId);
             const selected = checkedRows.map(row => Number(row.rowIndex));
-            const ok = selected.length === targetIndexes.length &&
-                selected.every(index => targetIndexes.includes(index)) &&
-                checkedRows.every(row => String(row.item.procCd || '').trim() === arguments[2]);
+            const ok = required.every(index => selected.includes(index)) &&
+                new Set(selected).size === selected.length &&
+                selected.every(index => required.includes(index)) &&
+                checkedRows.every(row => row.item && rows[Number(row.rowIndex)] &&
+                    String(row.item.basePriceSeq) === String(rows[Number(row.rowIndex)].basePriceSeq)) &&
+                checkedRows.every(row => arguments[2] === null || String(row.item.procCd || '').trim() === arguments[2]);
             return {ok, selected, reason: ok ? '' : 'target_rows_not_checked'};
             """,
             grid_id,
             target_indexes,
-            str(source_progress_code or '').strip(),
+            None if source_progress_code is None else str(source_progress_code or '').strip(),
+            str(target_progress_code or '').strip(),
         ) or {}
         if not result.get('ok'):
             raise RuntimeError(
-                f"대기예약 행 선택 실패: {result.get('reason') or 'unknown'}"
+                f"진행구분 대상 행 선택 실패: {result.get('reason') or 'unknown'}"
             )
 
-        expected_count = len(target_indexes)
+        selected_indexes = result.get('selected') or []
+        expected_count = len(selected_indexes)
         wait = WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval)
         wait.until(
             lambda d: int(d.execute_script(
@@ -7064,7 +7080,7 @@ class RpaGuiApp:
                     ? selected.length : -1;
                 """,
                 grid_id,
-                target_indexes,
+                selected_indexes,
             ) or 0) == expected_count
         )
         time.sleep(erp_short_pause)
@@ -7074,26 +7090,30 @@ class RpaGuiApp:
                                             driver_timeout, erp_short_pause, erp_poll_interval,
                                             source_progress_code=None, target_page=1):
         """현재 조회/페이지의 선택 행에 정보일괄수정 진행구분을 적용한다."""
-        selected_count = None
-        if source_progress_code is not None:
-            selected_count = self._select_current_page_rows_by_progress_status(
-                selectors,
-                source_progress_code,
-                erp_short_pause,
-                erp_poll_interval,
-            )
-            if not selected_count:
-                return 0
-        else:
-            header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
-            if not header_chk.is_selected():
-                self.driver.execute_script("arguments[0].click();", header_chk)
-                try:
-                    WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
-                        lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
-                    )
-                except Exception:
-                    time.sleep(erp_short_pause)
+        before_rows = self._current_page_progress_rows()
+        expected_rows = [row for row in before_rows if source_progress_code is None or
+                         str(row.get('procCd') or '').strip() == str(source_progress_code).strip()]
+        if not expected_rows and source_progress_code is not None:
+            return 0
+        expected_ids = self._progress_row_ids(expected_rows)
+        selected_count = self._select_current_page_rows_by_progress_status(
+            selectors, source_progress_code, erp_short_pause, erp_poll_interval,
+            target_progress_code=progress_code)
+        required_ids = expected_ids if source_progress_code is not None else {
+            str(row.get('basePriceSeq')).strip() for row in expected_rows
+            if str(row.get('procCd') or '').strip() != str(progress_code).strip()
+        }
+        checked = self.driver.execute_script(
+            "return AUIGrid.getCheckedRowItems(arguments[0]).map(row => row.item);",
+            self.config.get('grid_id', '#gridMain'))
+        checked_ids = self._progress_row_ids(checked) if checked else set()
+        if selected_count != len(checked_ids) or not required_ids <= checked_ids or not checked_ids <= expected_ids:
+            raise RuntimeError("진행구분 선택 행 ID가 저장 대상과 다릅니다.")
+        if not selected_count:
+            if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+                raise RuntimeError("진행구분 상태 확인을 위한 재조회가 중단됐습니다.")
+            self._verify_progress_rows(self._current_page_progress_rows(), expected_ids, progress_code)
+            return 0
 
         event_modify_selector = selectors.get("event_modify_button", "#eventModify")
         event_modify_btn = self.driver.find_element(By.CSS_SELECTOR, event_modify_selector)
@@ -7164,16 +7184,27 @@ class RpaGuiApp:
 
         wait.until(lambda d: not d.find_elements(By.CSS_SELECTOR, proc_select_selector))
         self.wait_until_grid_ready_after_save(selectors, driver_timeout)
-        if source_progress_code is not None and int(target_page or 1) == 1:
-            remaining_source_rows = sum(
-                1 for row in self._current_page_progress_rows()
-                if str(row.get('procCd') or '').strip() == str(source_progress_code or '').strip()
-            )
-            if remaining_source_rows:
-                raise RuntimeError(
-                    f"대상 진행구분 변경 후에도 원래 상태 행이 {remaining_source_rows}건 남아 있습니다."
-                )
+        if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+            raise RuntimeError("진행구분 저장 후 재조회가 중단됐습니다.")
+        self._verify_progress_rows(self._current_page_progress_rows(), expected_ids, progress_code)
         return selected_count
+
+    @staticmethod
+    def _progress_row_ids(rows):
+        ids = [str(row.get('basePriceSeq') or '').strip() for row in rows]
+        if not ids or any(not value or value == '0' for value in ids) or len(set(ids)) != len(ids):
+            raise RuntimeError("진행구분 대상 고유 ID가 없거나 중복되어 전수 검증할 수 없습니다.")
+        return set(ids)
+
+    @staticmethod
+    def _verify_progress_rows(rows, expected_ids, progress_code):
+        actual_ids = RpaGuiApp._progress_row_ids(rows)
+        failures = [str(row.get('basePriceSeq')) for row in rows
+                    if str(row.get('basePriceSeq')) in expected_ids and
+                    str(row.get('procCd') or '').strip() != str(progress_code)]
+        missing = expected_ids - actual_ids
+        if missing or failures:
+            raise RuntimeError(f"진행구분 저장 전수 검증 실패: 누락 {len(missing)}건 / 상태 불일치 {len(failures)}건 (ID {list(missing)[:5] + failures[:5]})")
 
     def find_and_switch_frame(self, selector):
         by, search_val = self._selector_locator(selector)
@@ -7202,7 +7233,7 @@ class RpaGuiApp:
         return False
 
     def _wait_for_erp_query_attempt(self, selectors, date_start, date_end,
-                                    airline_code, price_desc, timeout, poll_interval):
+                                    airline_code, price_desc, timeout, poll_interval, target_page=None):
         """이번 클릭의 XHR 완료와 이번 응답의 grid 바인딩을 함께 확인한다."""
         grid_id = self.config.get('grid_id', '#gridMain')
         # 요청 URL/본문/응답/인증정보를 수집하지 않는다. 클릭 중 시작한 요청만 관찰한다.
@@ -7274,11 +7305,17 @@ class RpaGuiApp:
         cleanup_js = "if (window.__naeilFareQuery) window.__naeilFareQuery.cleanup();"
         self.driver.execute_script(arm_js, grid_id)
         try:
-            button = self.driver.find_element(By.CSS_SELECTOR, selectors['search_button'])
-            self.driver.execute_script(
+            if target_page is None:
+                button = self.driver.find_element(By.CSS_SELECTOR, selectors['search_button'])
+                self.driver.execute_script(
                 "const s=window.__naeilFareQuery; s.clicking=true; "
                 "try {arguments[0].click();} finally {s.clicking=false;}", button,
-            )
+                )
+            else:
+                self.driver.execute_script(
+                    "const s=window.__naeilFareQuery; s.clicking=true; "
+                    "try {moveToPage(arguments[0], 'this', arguments[1]);} finally {s.clicking=false;}",
+                    target_page, self.config.get('paging_search_button', '#gridMain_r'))
             deadline = time.monotonic() + timeout
             stable_since = None
             mismatch_since = None
@@ -7308,7 +7345,7 @@ class RpaGuiApp:
                     for row in rows:
                         day = norm(row.get('startDay'))
                         if not (
-                            len(day) == 8 and day.isdigit() and start <= day <= end
+                            (not start or (len(day) == 8 and day.isdigit() and start <= day <= end))
                             and (not airline_code or str(row.get('air2Cd') or '') == airline_code)
                             and (not price_desc or price_desc in str(row.get('priceDesc') or ''))
                         ):
@@ -7710,10 +7747,10 @@ class RpaGuiApp:
 
             self.driver.switch_to.default_content()
             self.find_and_switch_frame(selectors["search_date_input"])
-            self.driver.execute_script(
-                "try { moveToPage(arguments[0], 'this', arguments[1]); } catch (e) {}",
-                target_page, rbutton
-            )
+            outcome = self._wait_for_erp_query_attempt(
+                selectors, '', '', '', '', timeout, poll_interval, target_page=target_page)
+            if outcome.get('status') != 'MATCH':
+                raise RuntimeError(f"페이지 {target_page} 재조회 확인 실패: {outcome.get('reason') or outcome.get('status')}")
             self.wait_until_grid_ready_after_save(selectors, timeout)
 
             if not self.is_running:
@@ -8237,6 +8274,8 @@ class RpaGuiApp:
                     pages_failed = []
                     page_errors = []
                     pages_price_skipped_all_closed = 0
+                    verified_progress_ids = set()
+                    progress_page_ids = {}
 
                     while target_page <= total_pages:
                         if not self.is_running:
@@ -8267,6 +8306,14 @@ class RpaGuiApp:
                                     elif progress_code:
                                         actions.append(f"진행구분 {progress_label}")
                                     print(f" -> [페이지 {target_page}/{total_pages}] 전체선택 → {' + '.join(actions)} → 저장{suffix}")
+
+                                if progress_code or set_reservation_requested_for_hotel:
+                                    page_ids = self._progress_row_ids(self._current_page_progress_rows())
+                                    if page_ids & verified_progress_ids:
+                                        raise RuntimeError("진행구분 처리 페이지가 이전 페이지의 행과 중복됩니다.")
+                                    if target_page in progress_page_ids and progress_page_ids[target_page] != page_ids:
+                                        raise RuntimeError("진행구분 재시도 조회의 대상 행이 변경됐습니다.")
+                                    progress_page_ids[target_page] = page_ids
 
                                 if set_reservation_requested_for_hotel:
                                     current_rows = self._current_page_progress_rows()
@@ -8330,8 +8377,13 @@ class RpaGuiApp:
                                         print(f" -> 진행구분 정보일괄수정: {progress_label}")
                                         self._apply_current_page_progress_status(
                                             selectors, progress_code, progress_label,
-                                            driver_timeout, erp_short_pause, erp_poll_interval
+                                            driver_timeout, erp_short_pause, erp_poll_interval,
+                                            target_page=target_page,
                                         )
+                                    self._verify_progress_rows(
+                                        self._current_page_progress_rows(), page_ids, progress_code)
+                                    if self._progress_row_ids(self._current_page_progress_rows()) != page_ids:
+                                        raise RuntimeError("진행구분 저장 후 현재 페이지 대상 ID가 변경됐습니다.")
                                 page_ok = True
                                 break
                             except Exception as page_ex:
@@ -8349,6 +8401,8 @@ class RpaGuiApp:
                             break
 
                         if page_ok:
+                            if progress_code or set_reservation_requested_for_hotel:
+                                verified_progress_ids.update(progress_page_ids[target_page])
                             pages_done += 1
                             if total_pages > 1:
                                 print(f" -> [저장 완료] {date_log_str} {target_page}/{total_pages}페이지")
@@ -8364,6 +8418,11 @@ class RpaGuiApp:
 
                     if not self.is_running:
                         raise RuntimeError(f"사용자 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤")
+
+                    if (progress_code or set_reservation_requested_for_hotel) and not pages_failed:
+                        if len(verified_progress_ids) != tot_rows:
+                            raise RuntimeError(f"진행구분 전체 대상 검증 실패: ERP {tot_rows}건 / 고유 확인 {len(verified_progress_ids)}건")
+                        print(f" -> 진행구분 전체 대상 확인: 고유 {len(verified_progress_ids)}/{tot_rows}건")
 
                     if pages_failed:
                         failed_str = ', '.join(str(p) for p in pages_failed)

@@ -1,11 +1,11 @@
 {
-    "version": "v5.0.28",
-    "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.28/NaeilERPUpdater_Setup_v5.0.28.exe",
-    "sha256": "5B1484D0CF4B533C9F64DFE4FF38F522EBDFF19D3AC0E3A3A12BFA5DB361F980",
+    "version": "v5.0.31",
+    "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.31/NaeilERPUpdater_Setup_v5.0.31.exe",
+    "sha256": "ED55415AA510273D449C28D74186E6F7F2EABC1DF29848648D59637540762B87",
     "notes": [
-        "조회가 완료됐지만 날짜·항공사·요금구분이 다른 경우 한 번 자동 재조회합니다.",
-        "요청 조건과 실제 불일치 행의 날짜·항공사·요금구분을 로그에 표시합니다.",
-        "재조회 후에도 조건이 다르면 조회 실패로 중단하고 요금을 저장하지 않습니다.",
-        "완료된 빈 조회 재확인·미완료 요청 취소 등 기존 조회 안전장치를 유지합니다."
+        "이미 예약마감된 행이 섞여 있어도 나머지 행의 진행구분 변경을 계속합니다.",
+        "ERP 전체선택이 개별 행을 선택하지 않는 화면에서도 대상 고유 ID로 정확히 선택합니다.",
+        "저장 후 페이지 전체 고유 ID와 목표 상태를 다시 조회해 누락과 상태 불일치를 확인합니다.",
+        "조회 조건 불일치 재조회와 예약마감 행의 요금 수정 제외 정책은 유지합니다."
     ]
 }
