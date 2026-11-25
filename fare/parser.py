@@ -137,12 +137,17 @@ def resolve_day_month(day_month: str, today: date | None = None) -> str | None:
     if not month:
         return None
     try:
-        candidate = date(today.year, month, int(day_text))
+        day = int(day_text)
     except ValueError:
         return None
-    if candidate.isoformat() < today.isoformat():
-        candidate = date(today.year + 1, month, int(day_text))
-    return candidate.isoformat()
+    for year in (today.year, today.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        if candidate >= today:
+            return candidate.isoformat()
+    return None
 
 
 def summarize_records(result: ParseResult) -> str:

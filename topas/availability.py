@@ -226,7 +226,8 @@ def _parse_block(block: str, year_hint: int | None) -> AvailabilityBlock:
         if current_idx is None:
             return
         existing = flights[current_idx]
-        class_text = " ".join(current_lines)
+        # Line 0 classes were already extracted from flight_match.group("class_text").
+        class_text = " ".join(current_lines[1:])
         merged_classes = dict(existing.classes)
         merged_classes.update(_parse_classes(class_text))
         flights[current_idx] = FlightAvailability(

@@ -817,6 +817,11 @@ class FareEngineTest(unittest.TestCase):
         self.assertIn("다낭 / 항공사: 7C / 2027-03-02", message)
         self.assertIn("호텔명 필터 불일치", message)
 
+        stopped_message = RpaGuiApp._format_failed_update_message(
+            33, 32, [{"date": "요금구분 : 다낭 / 항공사 : LJ / 2027-07-27", "error": "조회 실패"}], planned_cnt=3332
+        )
+        self.assertIn("전체 3,332개 중 33번째에서 멈췄습니다 (완료 32개 / 실패·스킵 1개 / 미실행 3,299개)", stopped_message)
+
     def test_show_failed_update_dialog_creates_widgets_without_error(self):
         import tkinter as tk
         root = tk.Tk()
@@ -957,6 +962,49 @@ class FareEngineTest(unittest.TestCase):
 
     def test_js_round(self):
         self.assertEqual(js_round(100.5), 101)
+
+    def test_resolve_day_month_handles_leap_day_without_dropping_or_crashing(self):
+        from fare.parser import resolve_day_month
+        self.assertEqual(resolve_day_month("29FEB", today=date(2027, 11, 25)), "2028-02-29")
+        self.assertIsNone(resolve_day_month("29FEB", today=date(2028, 3, 1)))
+
+    def test_normalize_date_rejects_invalid_calendar_dates(self):
+        import excel_loader
+        from gui import normalize_date
+        self.assertIsNone(normalize_date("2026-02-30"))
+        self.assertIsNone(normalize_date("20261345"))
+        self.assertIsNone(excel_loader._normalize_dt("2026-02-30"))
+        self.assertIsNone(excel_loader._normalize_dt("20261345"))
+        self.assertEqual(normalize_date("20280229"), "2028-02-29")
+
+    def test_is_grid_locked_detects_erp_save_loading_overlay(self):
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.driver = mock.MagicMock()
+        overlay = mock.MagicMock()
+        overlay.is_displayed.return_value = True
+        app.driver.find_elements.return_value = [overlay]
+        self.assertTrue(app.is_grid_locked())
+        selector = app.driver.find_elements.call_args[0][1]
+        self.assertIn(".layer_loading", selector)
+        self.assertIn(".loading_dim", selector)
+
+    def test_verify_saved_price_rows_passes_when_updated_and_fails_on_mismatch(self):
+        app = RpaGuiApp.__new__(RpaGuiApp)
+        app.config = {"grid_id": "#gridMain"}
+        app.is_running = True
+        app._sleep_interruptible = mock.MagicMock(return_value=True)
+        app._current_page_progress_rows = mock.MagicMock(side_effect=[
+            [{"basePriceSeq": 101, "landCost": 21114, "tourCost": 5000}],
+            [{"basePriceSeq": 101, "landCost": 54703, "tourCost": 54704}],
+        ])
+        app._verify_saved_price_rows({"101"}, {"landCost": 54703, "tourCost": 54704}, timeout=2.0, poll_interval=0.01)
+        self.assertEqual(app._current_page_progress_rows.call_count, 2)
+
+        app._current_page_progress_rows = mock.MagicMock(return_value=[
+            {"basePriceSeq": 101, "landCost": 21114, "tourCost": 5000},
+        ])
+        with self.assertRaisesRegex(RuntimeError, "반영 검증 실패"):
+            app._verify_saved_price_rows({"101"}, {"landCost": 54703, "tourCost": 54704}, timeout=0.05, poll_interval=0.01)
 
     def test_excel_export(self):
         result = calculate_round_trips(

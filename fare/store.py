@@ -60,7 +60,10 @@ def load_fare_snapshot(
         _save_cache(cache, snapshot)
         return snapshot
     except Exception as exc:
-        cached = _load_cache(cache)
+        try:
+            cached = _load_cache(cache)
+        except Exception:
+            cached = None
         if cached is not None:
             return FareSnapshot(
                 fares=cached.fares,

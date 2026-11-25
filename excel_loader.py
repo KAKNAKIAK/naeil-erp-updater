@@ -2,6 +2,7 @@
 import os
 import sys
 import re
+from datetime import date
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -42,13 +43,16 @@ def _normalize_dt(raw_dt):
     dt_str = str(raw_dt).strip().split(' ')[0]
     dt_str = dt_str.replace('/', '-').replace('.', '-').strip('-')
     if len(dt_str) == 8 and dt_str.isdigit():
-        return f"{dt_str[:4]}-{dt_str[4:6]}-{dt_str[6:]}"
+        try:
+            return date(int(dt_str[:4]), int(dt_str[4:6]), int(dt_str[6:])).isoformat()
+        except ValueError:
+            return None
     parts = dt_str.split('-')
     if len(parts) == 3:
         try:
             y, m, d = parts
             if len(y) == 4:
-                return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+                return date(int(y), int(m), int(d)).isoformat()
         except (ValueError, TypeError):
             return None
     return None
@@ -651,7 +655,7 @@ if __name__ == "__main__":
     path = select_excel_file()
     if path:
         print(f"선택된 파일: {path}")
-        data = load_and_validate_fares(path)
+        data, _ = load_and_validate_fares(path)
         if data:
             print("상위 5개 데이터 미리보기:")
             for item in data[:5]:

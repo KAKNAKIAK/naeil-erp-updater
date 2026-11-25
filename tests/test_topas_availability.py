@@ -132,6 +132,7 @@ class TopasAvailabilityTest(unittest.TestCase):
         self.assertEqual(flight.arrive_time, "2345")
         self.assertEqual(flight.equipment, "738")
         self.assertEqual(flight.classes["Y"], "9")
+        self.assertEqual(flight.classes["E"], "9")
         self.assertEqual(flight.classes["T"], "9")
 
     def test_flattens_to_rows(self):
@@ -176,6 +177,7 @@ class TopasAvailabilityTest(unittest.TestCase):
         self.assertEqual(flight.arrive_time, "0040")
         self.assertEqual(flight.classes["Y"], "9")
         self.assertEqual(flight.classes["F"], "R")
+        self.assertNotIn("Z", flight.classes)
 
     def test_ignores_prompt_only_ac1_noise(self):
         self.assertEqual(parse_availability_text(PROMPT_ONLY_SAMPLE, year_hint=2026), [])

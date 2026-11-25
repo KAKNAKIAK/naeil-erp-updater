@@ -87,6 +87,14 @@ class PreferCacheTest(unittest.TestCase):
         self.assertEqual(snap.fares[0]["route"], "ICN-SPN")
         self.assertEqual(len(snap.seasons), 1)
 
+    def test_corrupt_cache_does_not_mask_network_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "snap.json"
+            cache.write_text("{broken json", encoding="utf-8")
+            with mock.patch.object(store, "_fetch_fares_and_seasons", side_effect=RuntimeError("network down")):
+                with self.assertRaisesRegex(RuntimeError, "network down"):
+                    load_fare_snapshot({}, cache_path=cache)
+
 
 if __name__ == "__main__":
     unittest.main()

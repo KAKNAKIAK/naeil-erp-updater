@@ -91,7 +91,7 @@ class ErpQueryTest(unittest.TestCase):
 
     def test_driver_failure_is_not_converted_to_no_data(self):
         app = self.app([RuntimeError('driver disconnected')])
-        with self.assertRaisesRegex(RuntimeError, '조회 실패: RuntimeError'):
+        with self.assertRaisesRegex(RuntimeError, '조회 실패:.*ERP 화면 응답이 잠깐 끊겼습니다.*RuntimeError'):
             self.query(app)
 
     def test_stop_during_retry_delay_never_clicks_again(self):

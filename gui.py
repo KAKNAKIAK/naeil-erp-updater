@@ -50,7 +50,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.31"
+APP_VERSION = "v5.0.32"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -103,13 +103,16 @@ def normalize_date(raw):
     s = s.split(' ')[0].split('T')[0]
     t = s.replace('/', '-').replace('.', '-').strip('-')
     if len(t) == 8 and t.isdigit():
-        return f"{t[:4]}-{t[4:6]}-{t[6:]}"
+        try:
+            return datetime(int(t[:4]), int(t[4:6]), int(t[6:])).strftime('%Y-%m-%d')
+        except ValueError:
+            return None
     parts = t.split('-')
     if len(parts) == 3:
         try:
             y, m, d = parts
             if len(y) == 4:
-                return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+                return datetime(int(y), int(m), int(d)).strftime('%Y-%m-%d')
         except (ValueError, TypeError):
             return None
     return None
@@ -5239,10 +5242,6 @@ class RpaGuiApp:
         except Exception:
             pass
         try:
-            self.hotel_search_btn.config(state=state)
-        except Exception:
-            pass
-        try:
             if locked:
                 self.sheet.disable_bindings("edit_cell", "paste", "cut", "delete", "undo")
             else:
@@ -5605,9 +5604,9 @@ class RpaGuiApp:
         self.progress_bar['value'] = 0
         self.progress_lbl.config(text=f'0 / {len(self.fares_data)} (0%)')
 
-    def finish_rpa_on_ui(self, history):
+    def finish_rpa_on_ui(self, history, planned_cnt=None):
         try:
-            self.generate_and_show_report(history)
+            self.generate_and_show_report(history, planned_cnt=planned_cnt)
         finally:
             self.clean_up_ui_after_rpa()
 
@@ -7064,8 +7063,17 @@ class RpaGuiApp:
             str(target_progress_code or '').strip(),
         ) or {}
         if not result.get('ok'):
+            reason_code = result.get('reason') or 'unknown'
+            reason_map = {
+                'target_row_not_selectable': 'ERP에서 체크할 수 없는 행이 섞여 있어 선택하지 못했습니다',
+                'target_rows_not_checked': 'ERP에서 체크할 수 없는 행이 섞여 있어 선택하지 못했습니다',
+                'grid_check_api_not_available': 'ERP 표 선택 기능을 사용할 수 없습니다 (새로고침 후 다시 시도해 주세요)',
+                'grid_id_check_api_not_available': 'ERP 표 행 선택 기능을 사용할 수 없습니다 (새로고침 후 다시 시도해 주세요)',
+                'target_row_id_invalid': 'ERP 행 고유번호를 확인할 수 없어 선택을 중단했습니다',
+            }
+            friendly_reason = reason_map.get(reason_code, 'ERP 행 선택을 완료하지 못했습니다')
             raise RuntimeError(
-                f"진행구분 대상 행 선택 실패: {result.get('reason') or 'unknown'}"
+                f"진행구분 대상 행 선택 실패: {friendly_reason} ({reason_code})"
             )
 
         selected_indexes = result.get('selected') or []
@@ -7399,7 +7407,7 @@ class RpaGuiApp:
                 self.is_running = False
                 if not active_error:
                     raise
-                print(" -> [조회 실패] 미완료 조회 취소·감시 해제를 확인하지 못해 전체 작업을 중단합니다.")
+                print(" -> [조회 실패] 이전 조회가 멈추지 않아 다른 날짜 요금이 섞이는 것을 막기 위해 작업을 자동 중단합니다.")
 
     def _query_erp_with_retry(self, selectors, date_start, date_end, airline_code,
                               price_desc, timeout, poll_interval):
@@ -7420,8 +7428,10 @@ class RpaGuiApp:
                 )
             except Exception as error:
                 elapsed = time.monotonic() - started
-                print(f" -> [조회 {attempt}/{max_attempts}] {elapsed:.1f}초 / 건수 확인 불가 / 조회 실패 ({type(error).__name__})")
-                raise RuntimeError(f"조회 실패: {type(error).__name__}") from error
+                err_name = type(error).__name__
+                friendly_err = "ERP 화면 응답이 잠깐 끊겼습니다 (새로고침 후 다시 실행해 주세요)"
+                print(f" -> [조회 {attempt}/{max_attempts}] {elapsed:.1f}초 / 건수 확인 불가 / {friendly_err} ({err_name})")
+                raise RuntimeError(f"조회 실패: {friendly_err} ({err_name})") from error
             elapsed = time.monotonic() - started
             if not self.is_running or result.get('status') == 'STOP':
                 return None
@@ -7447,7 +7457,7 @@ class RpaGuiApp:
         return False
 
     def is_grid_locked(self):
-        mask_selector = ".aui-grid-mask, .aui-grid-loading, .aui-grid-loading-loading"
+        mask_selector = ".aui-grid-mask, .aui-grid-loading, .aui-grid-loading-loading, .layer_loading, .loading_dim"
         for mask in self.driver.find_elements(By.CSS_SELECTOR, mask_selector):
             try:
                 if mask.is_displayed():
@@ -7826,23 +7836,91 @@ class RpaGuiApp:
         except Exception:
             pass
 
-    def _save_current_page(self, selectors, wait, inputs_mapping, driver_timeout,
-                           erp_short_pause, erp_poll_interval):
-        """현재 페이지를 전체선택 → 요금 모달 → 값 주입 → 이중검증 → 저장 → 얼럿 처리 →
-        모달 닫기 → 그리드 준비 대기까지 1회 수행한다.
+    def _select_price_update_rows(self, selectors, erp_short_pause, erp_poll_interval):
+        """independentAllCheckBox=true 그리드에서도 예약마감(05) 제외 전체 행을 모델 기준으로 정확히 선택한다."""
+        grid_id = self.config.get('grid_id', '#gridMain')
+        result = self.driver.execute_script(
+            """
+            const gridId = arguments[0];
+            if (typeof AUIGrid === 'undefined' ||
+                typeof AUIGrid.getGridData !== 'function' ||
+                typeof AUIGrid.setCheckedRowsByIds !== 'function' ||
+                typeof AUIGrid.getCheckedRowItems !== 'function') {
+                return {fallback: true};
+            }
+            const rows = AUIGrid.getGridData(gridId) || [];
+            const targets = rows.filter(r => r && String(r.procCd || '').trim() !== '05');
+            const ids = targets.map(r => r.basePriceSeq);
+            if (!ids.length) {
+                return {ok: false, reason: 'no_updatable_rows', expectedIds: []};
+            }
+            if (ids.some(id => id === undefined || id === null || String(id).trim() === '' || String(id).trim() === '0')) {
+                return {fallback: true};
+            }
+            AUIGrid.setCheckedRowsByIds(gridId, ids);
+            const checked = (AUIGrid.getCheckedRowItems(gridId) || []).map(x => String((x.item || {}).basePriceSeq || '').trim());
+            const expected = ids.map(id => String(id).trim());
+            const checkedSet = new Set(checked);
+            const missing = expected.filter(id => !checkedSet.has(id));
+            return {ok: missing.length === 0, reason: missing.length ? 'rows_not_checked' : '', expectedIds: expected, checkedCount: checked.length};
+            """,
+            grid_id,
+        ) or {'fallback': True}
+        if result.get('fallback'):
+            header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
+            if not header_chk.is_selected():
+                self.driver.execute_script("arguments[0].click();", header_chk)
+                try:
+                    WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
+                        lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
+                    )
+                except Exception:
+                    time.sleep(erp_short_pause)
+            return set()
+        if not result.get('ok'):
+            raise RuntimeError(f"요금 수정 대상 행 선택 실패: {result.get('reason') or 'unknown'}")
+        return set(result.get('expectedIds') or [])
 
-        저장 결과 얼럿이 408/지연/오류성 문구이면 '저장 실패 가능'으로 보고 예외를 던져
-        상위 루프가 재시도하도록 한다(서버 지연으로 저장이 누락되는 것을 막기 위함)."""
-        # 1) 전체 선택
-        header_chk = self.driver.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"])
-        if not header_chk.is_selected():
-            self.driver.execute_script("arguments[0].click();", header_chk)
-            try:
-                WebDriverWait(self.driver, 2, poll_frequency=erp_poll_interval).until(
-                    lambda d: d.find_element(By.CSS_SELECTOR, selectors["header_all_checkbox"]).is_selected()
-                )
-            except Exception:
-                time.sleep(erp_short_pause)
+    def _verify_saved_price_rows(self, expected_ids, expected_fields, timeout, poll_interval):
+        """저장 후 재조회된 현재 페이지의 수정 대상 행(05 제외)에 금액이 실제 반영됐는지 확인한다."""
+        if not expected_ids or not expected_fields:
+            return
+        grid_id = self.config.get('grid_id', '#gridMain')
+        deadline = time.monotonic() + max(1.0, min(float(timeout), 8.0))
+        last_mismatches = []
+        while time.monotonic() < deadline:
+            if not self.is_running:
+                return
+            rows = self._current_page_progress_rows()
+            by_id = {str(r.get('basePriceSeq') or '').strip(): r for r in rows if isinstance(r, dict)}
+            mismatches = []
+            for seq in expected_ids:
+                row = by_id.get(seq)
+                if row is None:
+                    mismatches.append(f"ID={seq}:누락")
+                    continue
+                for field, expected_val in expected_fields.items():
+                    try:
+                        actual_val = int(float(str(row.get(field, 0)).replace(',', '').strip() or 0))
+                    except (ValueError, TypeError):
+                        actual_val = None
+                    if actual_val != expected_val:
+                        mismatches.append(f"ID={seq} {field}:{actual_val}!={expected_val}")
+                        break
+            if not mismatches:
+                return
+            last_mismatches = mismatches
+            if not self._sleep_interruptible(poll_interval):
+                return
+        sample = ", ".join(last_mismatches[:5])
+        raise RuntimeError(f"요금 저장 후 반영 검증 실패({len(last_mismatches)}건 불일치: {sample})")
+
+    def _save_current_page(self, selectors, wait, inputs_mapping, driver_timeout,
+                           erp_short_pause, erp_poll_interval, target_page=1):
+        """현재 페이지를 전체선택 → 요금 모달 → 값 주입 → 이중검증 → 저장 → 비동기 저장 완료/얼럿 처리 →
+        그리드 준비 대기 → 반영값 검증까지 1회 수행한다."""
+        # 1) 전체 선택 (예약마감 05 제외, 모델 체크 건수 검증)
+        expected_ids = self._select_price_update_rows(selectors, erp_short_pause, erp_poll_interval)
 
         # 2) 요금 모달 열기
         update_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["update_button"])
@@ -7890,37 +7968,77 @@ class RpaGuiApp:
         save_btn = self.driver.find_element(By.CSS_SELECTOR, selectors["save_button"])
         self.driver.execute_script("arguments[0].click();", save_btn)
 
-        # 6) 저장 확인/결과 얼럿 처리 — 오류성 얼럿이면 저장 실패로 간주
-        error_keywords = ('408', '지연', '연결이 원활', '관리자에게 문의', '오류가', '실패')
+        # 6) 저장 확인/결과 얼럿 처리 + 비동기 저장 완료(ERP가 직접 모달 닫기) 대기
+        # ERP go01_104_01_pop은 비동기 AJAX 성공 콜백에서만 #popCloseBtn을 눌러 모달을 닫는다.
+        # 저장 완료 전에 강제로 #popCloseBtn을 누르면 오류 얼럿이 유실되거나 저장과 재조회가 충돌한다.
+        error_keywords = ('408', '지연', '연결이 원활', '관리자에게 문의', '오류', '실패', '입력하세요')
+        confirm_keywords = ('기존 요금 삭제', '저장하시겠습니까', '업데이트 됩니다')
         save_alert_error = None
-        for _ in range(4):
+        accepted_confirm = False
+        save_deadline = time.monotonic() + max(5.0, float(driver_timeout))
+        while time.monotonic() < save_deadline:
             try:
                 alert = self.driver.switch_to.alert
                 atext = alert.text or ''
                 print(f" -> [얼럿 감지]: {atext}")
+                alert.accept()
                 if any(k in atext for k in error_keywords):
                     save_alert_error = atext
-                    alert.accept()
                     break
-                alert.accept()
+                if not accepted_confirm and any(k in atext for k in confirm_keywords):
+                    accepted_confirm = True
+                elif accepted_confirm:
+                    # 확인창 이후 ERP가 띄운 서버 응답 얼럿(responseData.msg)은 저장 오류 가능성으로 간주
+                    save_alert_error = atext
+                    break
+                else:
+                    accepted_confirm = True
                 time.sleep(erp_short_pause)
+                continue
             except Exception:
+                pass
+            try:
+                modal_open = any(
+                    el.is_displayed()
+                    for el in self.driver.find_elements(By.CSS_SELECTOR, selectors["save_button"])
+                )
+            except Exception:
+                modal_open = False
+            if not modal_open and not self.is_grid_locked():
                 break
+            if not self._sleep_interruptible(erp_poll_interval):
+                return
         if save_alert_error:
             raise RuntimeError(f"서버 응답 지연/오류로 저장이 반영되지 않았을 수 있음: {save_alert_error[:120]}")
-
-        # 7) 모달 닫기
         try:
-            self.driver.switch_to.default_content()
-            self.find_and_switch_frame(selectors["cancel_button"])
-            cancel_btn = self.driver.find_elements(By.CSS_SELECTOR, selectors["cancel_button"])
-            if cancel_btn and cancel_btn[0].is_displayed():
-                self.driver.execute_script("arguments[0].click();", cancel_btn[0])
+            still_open = any(
+                el.is_displayed()
+                for el in self.driver.find_elements(By.CSS_SELECTOR, selectors["save_button"])
+            )
         except Exception:
-            pass
+            still_open = False
+        if still_open:
+            raise RuntimeError("요금 저장 응답 시간 초과(저장 모달이 닫히지 않아 재시도가 필요합니다)")
 
-        # 8) 저장 후 그리드 락 해제 및 재조회(1페이지 리셋) 완료 대기
+        # 7) 저장 후 그리드 락 해제 및 재조회(1페이지 리셋) 완료 대기
         self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+
+        # 8) 저장 후 실제 반영값 검증 (ERP는 0원 입력을 무시하므로 양수 성인 요금 항목만 대조)
+        field_map = {
+            "adult_air_input": "airCost",
+            "adult_hotel_input": "hotelCost",
+            "adult_land_input": "landCost",
+            "adult_tour_input": "tourCost",
+            "adult_profit_input": "agentProfit",
+        }
+        expected_fields = {}
+        for key, grid_field in field_map.items():
+            if key in inputs_mapping:
+                num = _digits_to_int(inputs_mapping[key])
+                if num > 0:
+                    expected_fields[grid_field] = num
+        if expected_ids and expected_fields and target_page == 1:
+            self._verify_saved_price_rows(expected_ids, expected_fields, driver_timeout, erp_poll_interval)
 
     def launch_debug_chrome(self):
         base_dir = get_app_dir()
@@ -7972,6 +8090,7 @@ class RpaGuiApp:
 
     def rpa_worker_loop(self):
         rpa_history = []
+        self._last_loop_error = ""
 
         try:
             self.root.after(0, lambda: self.show_loading('ERP에 연결하고 있어요…'))
@@ -8057,7 +8176,10 @@ class RpaGuiApp:
 
             for index, row in enumerate(self.fares_data):
                 if not self.is_running:
-                    print("[RPA 알림] 사용자가 작업을 강제 중단했습니다.")
+                    if getattr(self, 'is_user_stopped', False):
+                        print("[RPA 알림] 사용자가 작업을 강제 중단했습니다.")
+                    else:
+                        print("[RPA 알림] 오류로 인해 작업이 안전하게 자동 중단되었습니다.")
                     break
 
                 while self.is_paused and self.is_running:
@@ -8175,7 +8297,10 @@ class RpaGuiApp:
                         driver_timeout, erp_poll_interval,
                     )
                     if matched is None or not self.is_running:
-                        print(" -> [중단] 사용자 중지로 조회를 멈춥니다.")
+                        if getattr(self, 'is_user_stopped', False):
+                            print(" -> [중단] 사용자 중지로 조회를 멈춥니다.")
+                        else:
+                            print(" -> [중단] 오류로 인해 조회를 안전하게 자동 중단합니다.")
                         break
                     if not matched:
                         print(f" -> [조회결과 없음] {date_log_str}: 완료된 조회를 재확인했으나 0건입니다.")
@@ -8279,7 +8404,10 @@ class RpaGuiApp:
 
                     while target_page <= total_pages:
                         if not self.is_running:
-                            print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
+                            if getattr(self, 'is_user_stopped', False):
+                                print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
+                            else:
+                                print(" -> [중단] 오류로 인해 남은 페이지 처리를 안전하게 자동 중단합니다.")
                             break
 
                         page_ok = False
@@ -8365,7 +8493,8 @@ class RpaGuiApp:
                                             )
                                         self._save_current_page(
                                             selectors, wait, inputs_mapping, driver_timeout,
-                                            erp_short_pause, erp_poll_interval
+                                            erp_short_pause, erp_poll_interval,
+                                            target_page=target_page,
                                         )
                                 if progress_code and not set_reservation_requested_for_hotel:
                                     if inputs_mapping:
@@ -8397,7 +8526,10 @@ class RpaGuiApp:
                                     self._sleep_interruptible(backoff)
 
                         if not self.is_running:
-                            print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
+                            if getattr(self, 'is_user_stopped', False):
+                                print(" -> [중단] 사용자 중지로 남은 페이지 처리를 멈춥니다.")
+                            else:
+                                print(" -> [중단] 오류로 인해 남은 페이지 처리를 안전하게 자동 중단합니다.")
                             break
 
                         if page_ok:
@@ -8417,7 +8549,12 @@ class RpaGuiApp:
                             self._sleep_interruptible(page_pause)
 
                     if not self.is_running:
-                        raise RuntimeError(f"사용자 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤")
+                        if getattr(self, 'is_user_stopped', False):
+                            raise RuntimeError(f"사용자 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤")
+                        detail = f" ({page_err[:160]})" if page_err else ""
+                        raise RuntimeError(
+                            f"자동 안전 중단: {date_log_str} {pages_done}/{total_pages}페이지까지 처리 후 멈춤{detail}"
+                        )
 
                     if (progress_code or set_reservation_requested_for_hotel) and not pages_failed:
                         if len(verified_progress_ids) != tot_rows:
@@ -8463,16 +8600,22 @@ class RpaGuiApp:
                 self.update_progress_ui(index + 1, total_items)
 
             print("\n========================================================")
-            print("[RPA 종료] 전체 날짜에 대한 작업이 마무리되었습니다.")
+            if len(rpa_history) < total_items:
+                unrun_items = total_items - len(rpa_history)
+                print(f"[RPA 종료] 전체 {total_items:,}개 중 {len(rpa_history):,}번째에서 작업이 멈췄습니다. (미실행 {unrun_items:,}개)")
+            else:
+                print("[RPA 종료] 전체 날짜에 대한 작업이 마무리되었습니다.")
             print("========================================================\n")
 
         except Exception as loop_ex:
+            self._last_loop_error = str(loop_ex)
             print(f"[치명적 오류] 작업 루프 처리 실패: {str(loop_ex)}")
 
         finally:
             history_snapshot = list(rpa_history)
+            planned_total = total_items if 'total_items' in locals() else len(history_snapshot)
             try:
-                self.root.after(0, lambda: self.finish_rpa_on_ui(history_snapshot))
+                self.root.after(0, lambda: self.finish_rpa_on_ui(history_snapshot, planned_total))
             except Exception:
                 pass
 
@@ -8483,17 +8626,27 @@ class RpaGuiApp:
         self.root.after(0, lambda: self.progress_bar.config(value=current))
 
     @staticmethod
-    def _format_failed_update_message(total_cnt, success_cnt, failed_items):
+    def _format_failed_update_message(total_cnt, success_cnt, failed_items, planned_cnt=None):
         failed_items = list(failed_items or [])
         fail_cnt = len(failed_items)
-        lines = [
-            f"전체 {total_cnt}개 날짜/기간 중 {fail_cnt}개 작업이 완료되지 않았습니다.",
-            f"(성공 {success_cnt}개 / 실패·스킵 {fail_cnt}개)",
-            "",
-            "아래 날짜/기간은 일부 또는 전체 작업이 완료되지 않았습니다.",
-            "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.",
-            "",
-        ]
+        unrun_cnt = max(0, int(planned_cnt) - total_cnt) if planned_cnt is not None else 0
+        if unrun_cnt > 0:
+            lines = [
+                f"전체 {int(planned_cnt):,}개 중 {total_cnt:,}번째에서 멈췄습니다 (완료 {success_cnt:,}개 / 실패·스킵 {fail_cnt:,}개 / 미실행 {unrun_cnt:,}개)",
+                "",
+                "아래 날짜/기간에서 작업이 멈췄으며, 뒤쪽 미실행 구간도 아직 반영되지 않았습니다.",
+                "크롬 ERP 화면을 새로고침(F5)한 뒤, 멈춘 날짜부터 끝까지 다시 실행해 주세요.",
+                "",
+            ]
+        else:
+            lines = [
+                f"전체 {total_cnt}개 날짜/기간 중 {fail_cnt}개 작업이 완료되지 않았습니다.",
+                f"(성공 {success_cnt}개 / 실패·스킵 {fail_cnt}개)",
+                "",
+                "아래 날짜/기간은 일부 또는 전체 작업이 완료되지 않았습니다.",
+                "ERP에서 직접 확인하거나 해당 날짜만 다시 실행해 주세요.",
+                "",
+            ]
         for item in failed_items:
             reason = item.get("error") or "조회결과 없음"
             lines.append(f"• {item.get('date') or '-'}  ({reason})")
@@ -8594,11 +8747,14 @@ class RpaGuiApp:
         confirm_btn.pack(side=tk.RIGHT)
         popup.protocol('WM_DELETE_WINDOW', popup.destroy)
 
-    def generate_and_show_report(self, history):
+    def generate_and_show_report(self, history, planned_cnt=None):
         if not history:
             return
 
         total_cnt = len(history)
+        if planned_cnt is None:
+            planned_cnt = max(total_cnt, len(getattr(self, 'fares_data', None) or []))
+        unrun_cnt = max(0, int(planned_cnt) - total_cnt)
         success_cnt = sum(1 for x in history if x["status"] == "SUCCESS")
         fail_cnt = total_cnt - success_cnt
 
@@ -8650,9 +8806,14 @@ class RpaGuiApp:
             report.append("- 없음")
 
         report.append("\n[요약 통계]")
-        report.append(f"- 전체 대상: {total_cnt}일")
+        if unrun_cnt > 0:
+            report.append(f"- 전체 대상: {planned_cnt}일 (실행 {total_cnt}일 / 미실행 {unrun_cnt}일)")
+        else:
+            report.append(f"- 전체 대상: {total_cnt}일")
         report.append(f"- 성공: {success_cnt}일")
         report.append(f"- 실패/스킵: {fail_cnt}일")
+        if unrun_cnt > 0:
+            report.append(f"- 미실행: {unrun_cnt}일")
         report.append("========================================================\n")
 
         print("\n".join(report))
@@ -8663,8 +8824,14 @@ class RpaGuiApp:
         try:
             ensure_window_visible(self.root)
             if failed_items:
-                msg = self._format_failed_update_message(total_cnt, success_cnt, failed_items)
+                msg = self._format_failed_update_message(total_cnt, success_cnt, failed_items, planned_cnt=planned_cnt)
                 self._show_failed_update_dialog(f"⚠️ 요금 수정 실패 {fail_cnt}건 — 확인 필요", msg)
+            elif unrun_cnt > 0:
+                messagebox.showwarning(
+                    "요금 수정 중단",
+                    f"전체 {planned_cnt:,}개 중 {total_cnt:,}개 완료 후 중단되었습니다.\n(미실행 {unrun_cnt:,}개)",
+                    parent=self.root,
+                )
             else:
                 messagebox.showinfo(
                     "요금 수정 완료",
