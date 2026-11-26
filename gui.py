@@ -34,6 +34,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoAlertPresentException, StaleElementReferenceException
 import selenium.webdriver.chrome.options
 import selenium.webdriver.chrome.service
 import selenium.webdriver.chrome.webdriver
@@ -50,7 +51,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.32"
+APP_VERSION = "v5.0.33"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -421,7 +422,8 @@ class RpaGuiApp:
     # ------------------------------------------------------------------
     # 설정 로드/저장
     # ------------------------------------------------------------------
-    def load_config(self):
+    @staticmethod
+    def load_config():
         base_dir = get_app_dir()
         config_path = os.path.join(base_dir, 'config.json')
         default_selectors = {
@@ -3274,13 +3276,6 @@ class RpaGuiApp:
         self._load_active_into_fb()
         self._sync_sheet_undo_baseline()
 
-    def _normalize_sheet_rows_for_compare(self, rows, width):
-        normalized = []
-        for row in rows or []:
-            values = list(row) + [''] * max(0, width - len(row))
-            normalized.append([str(value).strip() for value in values[:width]])
-        return normalized
-
     def _restore_merged_fare_source_if_unchanged(self, current_data):
         if self._merged_fare_restore_data is None or self._merged_fare_merged_data is None:
             return False
@@ -3609,9 +3604,6 @@ class RpaGuiApp:
             text = text[:117] + '...'
         return text
 
-    def _prompt_apply_formula(self, r, c):
-        self._prompt_apply_cell_to_column(r, c)
-
     def _prompt_apply_cell_to_column(self, r, c):
         source_value, is_formula = self._cell_fill_source(r, c)
         if source_value is None:
@@ -3636,9 +3628,6 @@ class RpaGuiApp:
                    f"(기존 수식 칸도 이 값으로 바뀝니다)")
         if messagebox.askyesno(title, msg):
             self._apply_cell_to_column(c, source_value, is_formula=is_formula)
-
-    def _apply_formula_to_column(self, col, formula):
-        self._apply_cell_to_column(col, formula, is_formula=True)
 
     def _apply_cell_to_column(self, col, value, is_formula=False):
         """value/formula를 col 열의 0~마지막 데이터 행까지 모두 적용한다."""
@@ -3908,39 +3897,6 @@ class RpaGuiApp:
         except Exception:
             pass
         return 'break'
-
-    def add_row(self):
-        self._record_sheet_undo_state('행 추가')
-        data = self.sheet.get_sheet_data()
-        data.append(["", "", "", "", "", "", "", ""])
-        self.sheet.set_sheet_data(data, reset_col_positions=False, reset_row_positions=True)
-        self.refresh_count()
-        self._load_active_into_fb()
-        self._sync_sheet_undo_baseline()
-
-    def delete_selected_rows(self):
-        try:
-            rows = self.sheet.get_selected_rows(get_cells_as_rows=True)
-        except Exception:
-            rows = set()
-        rows = sorted(rows, reverse=True)
-        if not rows:
-            messagebox.showinfo('행 삭제', '삭제할 행을 먼저 선택해 주세요. (왼쪽 행 번호를 클릭하면 행 전체가 선택됩니다.)')
-            return
-        self._record_sheet_undo_state('행 삭제')
-        data = self.sheet.get_sheet_data()
-        old_len = len(data)
-        deleted = [r for r in rows if 0 <= r < old_len]
-        for r in rows:
-            if 0 <= r < len(data):
-                del data[r]
-        if not data:
-            data = [["", "", "", "", "", "", "", ""]]
-        self._remap_formulas_after_delete(deleted, old_len)
-        self.sheet.set_sheet_data(data, reset_col_positions=False, reset_row_positions=True)
-        self.refresh_count()
-        self._load_active_into_fb()
-        self._sync_sheet_undo_baseline()
 
     def clear_sheet(self):
         if not messagebox.askyesno('전체 지우기', '입력한 모든 행을 지울까요?'):
@@ -5695,9 +5651,6 @@ class RpaGuiApp:
         options.add_experimental_option("debuggerAddress", config['address'])
         return webdriver.Chrome(options=options), config
 
-    def _connect_debug_browser(self, target_name):
-        return self._connect_debug_browser_config(self._debug_browser_config(target_name))
-
     def _selector_locator(self, selector):
         is_xpath = str(selector or '').startswith('//') or str(selector or '').startswith('xpath=')
         return (
@@ -6142,9 +6095,6 @@ class RpaGuiApp:
                 ),
             )
 
-    def _topas_send_ac1(self, driver):
-        self._topas_send_ac1_batch(driver, 1)
-
     def _topas_send_ac1_batch(self, driver, count):
         count = max(1, int(count))
         keys = self._topas_build_ac1_keys(count)
@@ -6228,9 +6178,6 @@ class RpaGuiApp:
             time.sleep(0.1)
         return None
 
-    def _topas_wait_next_block(self, driver, previous_block, timeout=None):
-        return self._topas_wait_next_blocks(driver, previous_block, 1, timeout=timeout)[0]
-
     def _topas_wait_next_blocks(self, driver, previous_block, expected_count, timeout=None):
         if timeout is None:
             timeout = self._float_config('topas_batch_timeout', 80, 10, 300)
@@ -6288,9 +6235,6 @@ class RpaGuiApp:
             collected.append(block)
         return collected
 
-    def _topas_is_new_response_block(self, block, previous_block):
-        return self._topas_is_response_block(block) and block.raw_text != previous_block.raw_text
-
     def _topas_is_response_block(self, block):
         if not block.request_command:
             return False
@@ -6322,7 +6266,7 @@ class RpaGuiApp:
         tail_chars = self._int_config('topas_parse_tail_chars', 80000, 4000, 300000)
         if len(text) > tail_chars:
             text = text[-tail_chars:]
-        blocks = parse_availability_text(text, year_hint=datetime.now().year)
+        blocks = parse_availability_text(text)
         return blocks
 
     def _topas_get_blocks_after(self, driver, previous_block):
@@ -6331,7 +6275,7 @@ class RpaGuiApp:
             return []
         text = self._topas_shell_text(driver, shell)
         segment = self._topas_text_after_previous_block(text, previous_block)
-        blocks = parse_availability_text(segment, year_hint=datetime.now().year)
+        blocks = parse_availability_text(segment)
         return blocks
 
     def _topas_text_after_previous_block(self, text, previous_block):
@@ -7174,7 +7118,9 @@ class RpaGuiApp:
 
         error_keywords = ('408', '지연', '연결이 원활', '관리자에게 문의', '오류가', '실패')
         save_alert_error = None
-        for _ in range(4):
+        accepted_alerts = 0
+        empty_polls = 0
+        while accepted_alerts < 4 and empty_polls < 4:
             try:
                 alert = self.driver.switch_to.alert
                 atext = alert.text or ''
@@ -7184,14 +7130,27 @@ class RpaGuiApp:
                     alert.accept()
                     break
                 alert.accept()
+                accepted_alerts += 1
+                empty_polls = 0
                 time.sleep(erp_short_pause)
             except Exception:
-                break
+                if accepted_alerts > 0:
+                    break
+                try:
+                    if not self.driver.find_elements(By.CSS_SELECTOR, proc_select_selector):
+                        break
+                except Exception:
+                    break
+                empty_polls += 1
+                time.sleep(erp_poll_interval)
         if save_alert_error:
             raise RuntimeError(f"진행구분 저장 오류 가능: {save_alert_error[:120]}")
 
         wait.until(lambda d: not d.find_elements(By.CSS_SELECTOR, proc_select_selector))
-        self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+        if not self.wait_until_grid_ready_after_save(selectors, driver_timeout):
+            if not self.is_running:
+                return 0
+            raise RuntimeError("진행구분 저장 후 ERP 그리드 준비 대기 시간이 초과되었습니다.")
         if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
             raise RuntimeError("진행구분 저장 후 재조회가 중단됐습니다.")
         self._verify_progress_rows(self._current_page_progress_rows(), expected_ids, progress_code)
@@ -7215,30 +7174,11 @@ class RpaGuiApp:
             raise RuntimeError(f"진행구분 저장 전수 검증 실패: 누락 {len(missing)}건 / 상태 불일치 {len(failures)}건 (ID {list(missing)[:5] + failures[:5]})")
 
     def find_and_switch_frame(self, selector):
-        by, search_val = self._selector_locator(selector)
-
         try:
             self.driver.switch_to.default_content()
-            if len(self.driver.find_elements(by, search_val)) > 0:
-                return True
         except Exception:
             pass
-
-        try:
-            self.driver.switch_to.default_content()
-            iframes = self.driver.find_elements(By.TAG_NAME, 'iframe')
-            for iframe in iframes:
-                try:
-                    self.driver.switch_to.default_content()
-                    self.driver.switch_to.frame(iframe)
-                    if len(self.driver.find_elements(by, search_val)) > 0:
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        return False
+        return self._switch_driver_to_frame_containing(self.driver, selector)
 
     def _wait_for_erp_query_attempt(self, selectors, date_start, date_end,
                                     airline_code, price_desc, timeout, poll_interval, target_page=None):
@@ -7737,7 +7677,6 @@ class RpaGuiApp:
         비어 있지 않으며, 연속 폴링에서 안정화된 것을 확인한 뒤 성공한다.
         실패 시 데이터 누락을 막기 위해 예외를 던진다.
         """
-        rbutton = self.config.get('paging_search_button', '#gridMain_r')
         poll_interval = self._float_config('erp_poll_interval', 0.25, 0.1, 1.0)
         target_page = int(target_page)
         cur = -1
@@ -7761,7 +7700,10 @@ class RpaGuiApp:
                 selectors, '', '', '', '', timeout, poll_interval, target_page=target_page)
             if outcome.get('status') != 'MATCH':
                 raise RuntimeError(f"페이지 {target_page} 재조회 확인 실패: {outcome.get('reason') or outcome.get('status')}")
-            self.wait_until_grid_ready_after_save(selectors, timeout)
+            if not self.wait_until_grid_ready_after_save(selectors, timeout):
+                if not self.is_running:
+                    return False
+                continue
 
             if not self.is_running:
                 return False
@@ -7885,7 +7827,6 @@ class RpaGuiApp:
         """저장 후 재조회된 현재 페이지의 수정 대상 행(05 제외)에 금액이 실제 반영됐는지 확인한다."""
         if not expected_ids or not expected_fields:
             return
-        grid_id = self.config.get('grid_id', '#gridMain')
         deadline = time.monotonic() + max(1.0, min(float(timeout), 8.0))
         last_mismatches = []
         while time.monotonic() < deadline:
@@ -7975,6 +7916,16 @@ class RpaGuiApp:
         confirm_keywords = ('기존 요금 삭제', '저장하시겠습니까', '업데이트 됩니다')
         save_alert_error = None
         accepted_confirm = False
+
+        def _is_save_modal_open():
+            try:
+                return any(
+                    el.is_displayed()
+                    for el in self.driver.find_elements(By.CSS_SELECTOR, selectors["save_button"])
+                )
+            except StaleElementReferenceException:
+                return True
+
         save_deadline = time.monotonic() + max(5.0, float(driver_timeout))
         while time.monotonic() < save_deadline:
             try:
@@ -7995,33 +7946,23 @@ class RpaGuiApp:
                     accepted_confirm = True
                 time.sleep(erp_short_pause)
                 continue
-            except Exception:
+            except NoAlertPresentException:
                 pass
-            try:
-                modal_open = any(
-                    el.is_displayed()
-                    for el in self.driver.find_elements(By.CSS_SELECTOR, selectors["save_button"])
-                )
-            except Exception:
-                modal_open = False
+            modal_open = _is_save_modal_open()
             if not modal_open and not self.is_grid_locked():
                 break
             if not self._sleep_interruptible(erp_poll_interval):
-                return
+                return False
         if save_alert_error:
             raise RuntimeError(f"서버 응답 지연/오류로 저장이 반영되지 않았을 수 있음: {save_alert_error[:120]}")
-        try:
-            still_open = any(
-                el.is_displayed()
-                for el in self.driver.find_elements(By.CSS_SELECTOR, selectors["save_button"])
-            )
-        except Exception:
-            still_open = False
-        if still_open:
+        if _is_save_modal_open():
             raise RuntimeError("요금 저장 응답 시간 초과(저장 모달이 닫히지 않아 재시도가 필요합니다)")
 
         # 7) 저장 후 그리드 락 해제 및 재조회(1페이지 리셋) 완료 대기
-        self.wait_until_grid_ready_after_save(selectors, driver_timeout)
+        if not self.wait_until_grid_ready_after_save(selectors, driver_timeout):
+            if not self.is_running:
+                return False
+            raise RuntimeError("요금 저장 후 ERP 그리드 준비 대기 시간이 초과되었습니다.")
 
         # 8) 저장 후 실제 반영값 검증 (ERP는 0원 입력을 무시하므로 양수 성인 요금 항목만 대조)
         field_map = {
@@ -8037,8 +7978,15 @@ class RpaGuiApp:
                 num = _digits_to_int(inputs_mapping[key])
                 if num > 0:
                     expected_fields[grid_field] = num
-        if expected_ids and expected_fields and target_page == 1:
+        target_page = int(target_page)
+        on_target_page = target_page == 1
+        if expected_ids and expected_fields:
+            if target_page > 1:
+                if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
+                    return False
+                on_target_page = True
             self._verify_saved_price_rows(expected_ids, expected_fields, driver_timeout, erp_poll_interval)
+        return on_target_page
 
     def launch_debug_chrome(self):
         base_dir = get_app_dir()
@@ -8465,15 +8413,13 @@ class RpaGuiApp:
                                             source_progress_code='06',
                                             target_page=target_page,
                                         )
-                                        if target_page > 1:
-                                            if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
-                                                break
                                         updated_rows = self._current_page_progress_rows()
                                         if self._progress_status_row_count(updated_rows, '06'):
                                             raise RuntimeError(
                                                 "호텔비 수정 전 대기예약 예약신청 선변경 검증에 실패했습니다."
                                             )
 
+                                saved_on_target_page = False
                                 if inputs_mapping:
                                     progress_counts = self._current_page_progress_status_counts()
                                     reservation_closed_count = int(progress_counts.get("reservation_closed") or 0)
@@ -8491,13 +8437,13 @@ class RpaGuiApp:
                                                 f"예약마감 {reservation_closed_count}건은 ERP 정책상 제외되고, "
                                                 "수정 가능한 행만 업데이트됩니다."
                                             )
-                                        self._save_current_page(
+                                        saved_on_target_page = bool(self._save_current_page(
                                             selectors, wait, inputs_mapping, driver_timeout,
                                             erp_short_pause, erp_poll_interval,
                                             target_page=target_page,
-                                        )
+                                        ))
                                 if progress_code and not set_reservation_requested_for_hotel:
-                                    if inputs_mapping:
+                                    if inputs_mapping and not (target_page > 1 and saved_on_target_page):
                                         if not self.navigate_to_grid_page(selectors, target_page, driver_timeout):
                                             break
                                     if self._current_page_progress_status_matches(progress_code, progress_label):

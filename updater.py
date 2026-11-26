@@ -49,7 +49,6 @@ def wait_for_process_exit(pid, timeout=90):
     if os.name == "nt":
         try:
             import ctypes
-            from ctypes import wintypes
 
             kernel32 = ctypes.windll.kernel32
             synchronize = 0x00100000

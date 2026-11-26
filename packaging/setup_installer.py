@@ -28,7 +28,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v5.0.32"
+APP_VERSION = "v5.0.33"
 
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
@@ -247,13 +247,10 @@ def register_uninstall(install_dir):
             return
 
         app_exe = install_dir / f"{APP_NAME}.exe"
-        if uninstaller is not None:
-            uninstall_cmd = f'"{uninstaller}" --uninstall'
-            quiet_cmd = f'"{uninstaller}" --uninstall --silent'
-        else:
-            # 제거기 복사 실패 시: 설치 폴더 경로만 넘겨 자기 자신으로 제거 가능하게.
-            uninstall_cmd = f'"{app_exe}" --uninstall'
-            quiet_cmd = uninstall_cmd
+        if uninstaller is None:
+            return
+        uninstall_cmd = f'"{uninstaller}" --uninstall'
+        quiet_cmd = f'"{uninstaller}" --uninstall --silent'
 
         key = winreg.CreateKeyEx(
             winreg.HKEY_CURRENT_USER, UNINSTALL_REG_KEY, 0, winreg.KEY_WRITE

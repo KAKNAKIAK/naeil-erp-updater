@@ -111,7 +111,7 @@ def parse_topas_lines(lines: Iterable[str], today: date | None = None) -> ParseR
         if current_date:
             current_lines.append(line)
             tokens = [token.strip().upper() for token in CLASS_RE.findall(line)]
-            current_classes.extend(token for token in tokens if token != "AC1")
+            current_classes.extend(tokens)
 
     flush()
 

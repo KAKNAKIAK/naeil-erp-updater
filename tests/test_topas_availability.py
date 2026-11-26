@@ -6,8 +6,8 @@ from topas.availability import (
     build_ac1_workflow_commands,
     build_availability_commands,
     parse_availability_text,
+    _resolve_day_month,
 )
-from topas.pacing import TopasPacingPolicy
 
 
 SAMPLE = """AN17AUGICNGUM/ALJ915 -AC-
@@ -149,10 +149,13 @@ class TopasAvailabilityTest(unittest.TestCase):
         self.assertEqual([row["date"] for row in rows], ["2026-07-01", "2026-07-02"])
         self.assertEqual(rows[1]["class_S"], "9")
 
-    def test_prompt_ready_requires_prompt_without_loading_marker(self):
-        policy = TopasPacingPolicy()
-        self.assertTrue(policy.is_ready_for_next_command(SAMPLE))
-        self.assertFalse(policy.is_ready_for_next_command("AC1\n||\n>"))
+    def test_resolve_day_month_handles_leap_day_invalid_date_and_year_rollover(self):
+        self.assertEqual(_resolve_day_month("29", "FEB", 2027), date(2028, 2, 29))
+        self.assertIsNone(_resolve_day_month("31", "APR", 2026))
+        self.assertEqual(
+            _resolve_day_month("05", "JAN", None, today=date(2026, 12, 20)),
+            date(2027, 1, 5),
+        )
 
     def test_keeps_no_flight_response_as_raw_block(self):
         blocks = parse_availability_text(NO_FLIGHT_SAMPLE, year_hint=2026)

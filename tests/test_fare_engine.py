@@ -1006,6 +1006,92 @@ class FareEngineTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "반영 검증 실패"):
             app._verify_saved_price_rows({"101"}, {"landCost": 54703, "tourCost": 54704}, timeout=0.05, poll_interval=0.01)
 
+    def test_closed_dates_without_base_y_fare_are_not_dropped_or_out_of_range(self):
+        dep_text = "\n".join([
+            "AN10JULICNGUM/ALJ915 -AC-",
+            "** AMADEUS AVAILABILITY - AN ** GUM GUAM.GU 29 FR 10JUL 0000",
+            " 1   LJ 915  Y0 /ICN 2 GUM I 1815 2345 E0/738 4:30",
+            "AN11JULICNGUM/ALJ915 -AC-",
+            "** AMADEUS AVAILABILITY - AN ** GUM GUAM.GU 30 SA 11JUL 0000",
+            " 1   LJ 915  Q9 /ICN 2 GUM I 1815 2345 E0/738 4:30",
+        ])
+        ret_text = "\n".join([
+            "AN13JULGUMICN/ALJ916 -AC-",
+            "** AMADEUS AVAILABILITY - AN ** SEL SEOUL.KR 32 MO 13JUL 0000",
+            " 1   LJ 916  Q9 /GUM I ICN 2 0135 0520 E0/738 4:45",
+            "AN14JULGUMICN/ALJ916 -AC-",
+            "** AMADEUS AVAILABILITY - AN ** SEL SEOUL.KR 33 TU 14JUL 0000",
+            " 1   LJ 916  Y0 /GUM I ICN 2 0135 0520 E0/738 4:45",
+        ])
+        fares = [{"route": "ICN-GUM-LJ", "type": "기준", "classCode": "Q", "roundTripFare": 300000}]
+        calc = calculate_round_trips(
+            dep_text,
+            ret_text,
+            fares,
+            [],
+            "ICN-GUM-LJ",
+            nights=(3,),
+            today=date(2026, 6, 11),
+        )
+        rows = calc.result[3]
+        self.assertEqual([(r.dep_date, r.is_closed) for r in rows], [
+            ("2026-07-10", True),
+            ("2026-07-11", True),
+        ])
+        self.assertFalse(any("범위를 벗어나" in w for w in calc.warnings))
+
+    def test_save_current_page_verifies_page_2_and_fails_on_grid_ready_timeout_or_driver_error(self):
+        from selenium.common.exceptions import NoAlertPresentException, WebDriverException
+
+        selectors = {
+            "update_button": "#priceUpdate",
+            "adult_air_input": "#addAir01",
+            "adult_land_input": "#addLand21",
+            "save_button": "#priceSave",
+            "cancel_button": "#popCloseBtn",
+        }
+
+        def _make_app():
+            app = RpaGuiApp.__new__(RpaGuiApp)
+            app.is_running = True
+            app.config = {"grid_id": "#gridMain"}
+            app.driver = mock.MagicMock()
+            app._select_price_update_rows = mock.MagicMock(return_value={"201"})
+            app.is_grid_locked = mock.MagicMock(return_value=False)
+            app._sleep_interruptible = mock.MagicMock(return_value=True)
+            app.wait_until_grid_ready_after_save = mock.MagicMock(return_value=True)
+            app.navigate_to_grid_page = mock.MagicMock(return_value=True)
+            app._verify_saved_price_rows = mock.MagicMock()
+            app.driver.execute_script.side_effect = [None, None, "54,703", None]
+            type(app.driver.switch_to).alert = mock.PropertyMock(side_effect=NoAlertPresentException("none"))
+            app.driver.find_elements.return_value = []
+            return app
+
+        app = _make_app()
+        with mock.patch("gui.time.sleep"):
+            on_target = app._save_current_page(
+                selectors, mock.MagicMock(), {"adult_land_input": "54703"}, 5, 0.0, 0.01, target_page=2
+            )
+        self.assertTrue(on_target)
+        app.navigate_to_grid_page.assert_called_once_with(selectors, 2, 5)
+        app._verify_saved_price_rows.assert_called_once_with({"201"}, {"landCost": 54703}, 5, 0.01)
+
+        app_timeout = _make_app()
+        app_timeout.wait_until_grid_ready_after_save.return_value = False
+        with mock.patch("gui.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "그리드 준비 대기 시간이 초과"):
+                app_timeout._save_current_page(
+                    selectors, mock.MagicMock(), {"adult_land_input": "54703"}, 5, 0.0, 0.01, target_page=1
+                )
+
+        app_err = _make_app()
+        app_err.driver.find_elements.side_effect = WebDriverException("session disconnected")
+        with mock.patch("gui.time.sleep"):
+            with self.assertRaises(WebDriverException):
+                app_err._save_current_page(
+                    selectors, mock.MagicMock(), {"adult_land_input": "54703"}, 5, 0.0, 0.01, target_page=1
+                )
+
     def test_excel_export(self):
         result = calculate_round_trips(
             DEP_TEXT,

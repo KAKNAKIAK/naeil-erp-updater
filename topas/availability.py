@@ -210,12 +210,11 @@ def _parse_block(block: str, year_hint: int | None) -> AvailabilityBlock:
     request = REQUEST_RE.search(request_line or "")
     header = next((HEADER_RE.search(line) for line in lines if HEADER_RE.search(line)), None)
 
-    year = year_hint or date.today().year
     travel_date = None
     if header:
-        travel_date = _resolve_day_month(header.group("day"), header.group("month"), year)
+        travel_date = _resolve_day_month(header.group("day"), header.group("month"), year_hint)
     elif request:
-        travel_date = _resolve_day_month(request.group("day"), request.group("month"), year)
+        travel_date = _resolve_day_month(request.group("day"), request.group("month"), year_hint)
 
     flights: list[FlightAvailability] = []
     current_idx: int | None = None
@@ -291,8 +290,41 @@ def _parse_block(block: str, year_hint: int | None) -> AvailabilityBlock:
     )
 
 
-def _resolve_day_month(day: str, month: str, year: int) -> date:
-    return date(year, MONTHS[month.upper()], int(day))
+def _resolve_day_month(
+    day: str,
+    month: str,
+    year: int | None,
+    today: date | None = None,
+) -> date | None:
+    month_num = MONTHS.get(month.upper())
+    if not month_num:
+        return None
+    try:
+        day_num = int(day)
+    except ValueError:
+        return None
+    if year is not None:
+        try:
+            return date(year, month_num, day_num)
+        except ValueError:
+            if month_num == 2 and day_num == 29:
+                try:
+                    return date(year + 1, month_num, day_num)
+                except ValueError:
+                    return None
+            return None
+    ref = today or date.today()
+    first_valid: date | None = None
+    for candidate_year in (ref.year, ref.year + 1):
+        try:
+            candidate = date(candidate_year, month_num, day_num)
+        except ValueError:
+            continue
+        if first_valid is None:
+            first_valid = candidate
+        if candidate >= ref:
+            return candidate
+    return first_valid
 
 
 def _parse_classes(text: str) -> dict[str, str]:

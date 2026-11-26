@@ -42,7 +42,7 @@ Write-Host "[publish] 대상 버전: $Version"
 # 1) 빌드
 if (-not $SkipBuild) {
     Write-Host "[publish] build_setup.ps1 실행..."
-    & (Join-Path $ProjectRoot "build_setup.ps1")
+    & (Join-Path $ProjectRoot "build_setup.ps1") -Version $Version
     if ($LASTEXITCODE -ne 0) { throw "빌드 실패" }
 }
 

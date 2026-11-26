@@ -102,12 +102,12 @@ def calculate_round_trips(
 
     for dep_date in sorted(dep_calc["fare_map"].keys()):
         dep_fare = dep_calc["fare_map"][dep_date]
-        if not dep_fare:
+        if dep_fare is None:
             continue
         for night in result.keys():
             ret_date = add_days(dep_date, night)
             ret_fare = ret_fare_map.get(ret_date)
-            if not ret_fare:
+            if ret_fare is None:
                 out_of_range[night].append(dep_date)
                 continue
             closed = bool(dep_closed_map.get(dep_date) or ret_closed_map.get(ret_date))

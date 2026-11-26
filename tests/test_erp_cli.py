@@ -1,4 +1,5 @@
 import io
+import inspect
 import json
 import os
 import tempfile
@@ -210,6 +211,26 @@ class ErpCliTest(unittest.TestCase):
         self.assertIn("자동 안전 중단", history[0]["error"])
         self.assertIn("cleanup abort failed", history[0]["error"])
         self.assertNotIn("사용자 중단", history[0]["error"])
+
+    def test_headless_runner_override_signatures_and_required_state_match_gui_contract(self):
+        for method_name in ("_save_current_page", "_apply_current_page_progress_status"):
+            gui_sig = inspect.signature(getattr(gui.RpaGuiApp, method_name))
+            cli_sig = inspect.signature(getattr(erp_cli.HeadlessErpRunner, method_name))
+            self.assertEqual(list(cli_sig.parameters.keys()), list(gui_sig.parameters.keys()))
+            for param_name in gui_sig.parameters:
+                self.assertEqual(
+                    cli_sig.parameters[param_name].default,
+                    gui_sig.parameters[param_name].default,
+                )
+        runner = erp_cli.HeadlessErpRunner(erp_cli.load_cli_config(), dry_run=True)
+        for attr in (
+            "config", "driver", "root", "is_running", "is_paused", "is_user_stopped",
+            "fares_data", "selected_airline_code", "selected_price_desc",
+            "selected_departure_flight", "selected_hotel_name", "selected_hotel_seq",
+            "selected_hotel_seq_strict", "selected_progress_text",
+            "airline_value_by_label", "airline_choices",
+        ):
+            self.assertTrue(hasattr(runner, attr), f"Missing HeadlessErpRunner attr: {attr}")
 
 
 if __name__ == "__main__":

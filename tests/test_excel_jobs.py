@@ -82,6 +82,8 @@ class ExcelJobImportTest(unittest.TestCase):
         self.assertEqual(row["progress_status"], "예약마감")
         self.assertEqual(row["progress_status_field"], "adult_air")
         self.assertEqual(row["adult_air"], "")
+        self.assertEqual(row["adult_hotel"], "")
+        self.assertEqual(row["adult_land"], "")
 
     def test_pending_reservation_fare_cell_keeps_source_field(self):
         path = self._write_excel([
@@ -109,6 +111,48 @@ class ExcelJobImportTest(unittest.TestCase):
 
         self.assertFalse(result["detected"])
         self.assertEqual(result["jobs"], [])
+
+    def test_single_named_hotel_column_does_not_bleed_into_air_and_skips_error_tokens(self):
+        path = self._write_excel([
+            {
+                "요금구분": "괌_3박",
+                "항공사코드": "LJ",
+                "시작일": "2026-07-15T00:00:00",
+                "호텔비": 250000,
+            },
+            {
+                "요금구분": "괌_3박",
+                "항공사코드": "LJ",
+                "시작일": "2026-07-16",
+                "호텔비": "조회불가",
+            },
+        ])
+
+        result = excel_loader.load_fare_jobs_from_excel(path)
+
+        self.assertEqual(len(result["jobs"]), 1)
+        rows = result["jobs"][0]["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["date"], "2026-07-15")
+        self.assertEqual(rows[0]["adult_air"], "")
+        self.assertEqual(rows[0]["adult_hotel"], 250000)
+        self.assertTrue(any("조회불가" in msg for msg in result["errors"]))
+
+    def test_load_and_validate_fares_preserves_blanks_and_progress_status(self):
+        path = self._write_excel([
+            {"날짜": "2026-07-15", "항공비": "예약마감"},
+            {"날짜": "2026-07-16", "항공비": "조회불가"},
+            {"날짜": "2026-07-17", "항공비": 310000},
+        ])
+
+        rows, is_period = excel_loader.load_and_validate_fares(path)
+
+        self.assertFalse(is_period)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["adult_air"], "예약마감")
+        self.assertEqual(rows[0]["adult_hotel"], "")
+        self.assertEqual(rows[1]["adult_air"], 310000)
+        self.assertEqual(rows[1]["adult_hotel"], "")
 
 
 if __name__ == "__main__":

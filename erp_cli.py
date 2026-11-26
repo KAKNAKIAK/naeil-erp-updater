@@ -11,23 +11,14 @@ import pandas as pd
 import excel_loader
 import gui
 
-FARE_FIELDS = (
-    ("adult_air", ["항공비", "성인항공비", "운임", "최저가", "adult_air", "adultair", "air"], "성인 항공비"),
-    ("adult_hotel", ["호텔비", "성인호텔비", "adult_hotel", "hotel"], "성인 호텔비"),
-    ("adult_land", ["지상비", "성인지상비", "adult_land", "land"], "성인 지상비"),
-    ("adult_tour", ["여행경비", "경비", "adult_tour", "tour", "expense"], "성인 여행경비"),
-    ("adult_profit", ["알선수익", "수익", "adult_profit", "profit"], "성인 알선수익"),
-    ("child_fare", ["소아", "소아요금", "child", "child_fare", "childfare"], "소아 요금"),
-    ("infant_fare", ["유아", "유아요금", "infant", "infant_fare", "infantfare"], "유아 요금"),
-)
-FARE_KEYS = tuple(field for field, _aliases, _label in FARE_FIELDS)
-SKIP_TOKENS = {"조회불가", "조회오류"}
+FARE_FIELDS = excel_loader.FARE_FIELDS
+FARE_KEYS = excel_loader.FARE_KEYS
+SKIP_TOKENS = excel_loader.SKIP_TOKENS
 
 
 def load_cli_config(config_path=None):
     """Load erp_updater config.json merged over RpaGuiApp default config/selectors."""
-    runner = HeadlessErpRunner.__new__(HeadlessErpRunner)
-    cfg = gui.RpaGuiApp.load_config(runner)
+    cfg = gui.RpaGuiApp.load_config()
     if config_path:
         with open(config_path, "r", encoding="utf-8") as f:
             user_cfg = json.load(f)
@@ -43,21 +34,7 @@ def load_cli_config(config_path=None):
 
 
 def _parse_optional_fare(val, label, row_no, warnings):
-    """Parse fare cell preserving blank/missing cells as '' so ERP leaves untouched fields alone."""
-    if val is None or pd.isna(val):
-        return ""
-    text = str(val).strip()
-    if not text or excel_loader._has_progress_status_text(text):
-        return ""
-    try:
-        parsed = int(float(text.replace(",", "")))
-        if parsed < 0:
-            warnings.append(f"{row_no}행: {label} 요금이 음수({parsed})라 제외했습니다.")
-            return ""
-        return str(parsed)
-    except (ValueError, TypeError):
-        warnings.append(f"{row_no}행: {label} 요금 오류값({text})을 제외했습니다.")
-        return ""
+    return excel_loader._parse_optional_fare(val, label, row_no, warnings, as_str=True)
 
 
 def _read_excel_jobs(
@@ -125,14 +102,7 @@ def _read_excel_jobs(
                 end_col = candidates[0]
 
     is_period = end_col is not None
-    ordered_fare_cols = [idx for idx in data_cols if idx not in {start_col, end_col}]
-    has_named_fares = any(excel_loader._find_column(headers, aliases) is not None for _, aliases, _ in FARE_FIELDS)
-    col_map = []
-    for offset, (field, aliases, label) in enumerate(FARE_FIELDS):
-        found = excel_loader._find_column(headers, aliases)
-        if found is None and not has_named_fares:
-            found = ordered_fare_cols[offset] if offset < len(ordered_fare_cols) else None
-        col_map.append((field, found, label))
+    col_map = excel_loader._resolve_fare_columns(headers, data_cols, start_col, end_col)
 
     default_p_code, default_p_label = excel_loader.progress_status_from_text(progress_text)
     default_progress = default_p_label if default_p_code else str(progress_text or "").strip()
