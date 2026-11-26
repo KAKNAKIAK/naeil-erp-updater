@@ -1,8 +1,9 @@
 {
-  "version": "v5.0.34",
-  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.34/NaeilERPUpdater_Setup_v5.0.34.exe",
-  "sha256": "AC047FABA4F93080975FAEAC70CC17A98521360551E14EE071AF1EEF37377E88",
+  "version": "v5.0.35",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.35/NaeilERPUpdater_Setup_v5.0.35.exe",
+  "sha256": "D2C64269CDFC876DA5CC65DC23629B6684FA155B23B48F00D8042576A078B419",
   "notes": [
-    "ERP 디버깅 Chrome 기본 포트를 9224로 변경했습니다. TOPAS 기본 포트 9222는 유지합니다."
+    "기존 설치 설정의 ERP 기본 포트 9223을 9224로 옮깁니다. 사용자 지정 포트와 다른 설정은 보존합니다.",
+    "ERP 디버깅 Chrome 기본 포트는 9224, TOPAS 기본 포트는 9222입니다."
   ]
 }
