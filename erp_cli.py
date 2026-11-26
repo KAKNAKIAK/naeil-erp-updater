@@ -343,7 +343,7 @@ class HeadlessErpRunner(gui.RpaGuiApp):
 
     def _debug_browser_configs(self, target_name):
         if self.explicit_erp_address and str(target_name or "").upper() != "TOPAS":
-            host, port = self._parse_debugger_address(self.explicit_erp_address, 9223)
+            host, port = self._parse_debugger_address(self.explicit_erp_address, 9224)
             return [{
                 "address": f"{host}:{port}",
                 "host": host,
@@ -510,7 +510,7 @@ def main(argv=None):
     try:
         with contextlib.redirect_stdout(sys.stderr):
             config = load_cli_config(args.config)
-            erp_addr = args.erp_address or config.get("erp_debugger_address", "127.0.0.1:9223")
+            erp_addr = args.erp_address or config.get("erp_debugger_address", "127.0.0.1:9224")
             payload["erpAddress"] = erp_addr
 
             if args.check:

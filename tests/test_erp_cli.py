@@ -89,13 +89,17 @@ class ErpCliTest(unittest.TestCase):
 
     def test_explicit_erp_address_does_not_fallback_to_9222(self):
         runner = erp_cli.HeadlessErpRunner(
-            {"debugger_address": "127.0.0.1:9222", "erp_debugger_address": "127.0.0.1:9223"},
+            {"debugger_address": "127.0.0.1:9222", "erp_debugger_address": "127.0.0.1:9224"},
             dry_run=True,
             explicit_erp_address="127.0.0.1:9224",
         )
         configs = runner._debug_browser_configs("ERP")
         self.assertEqual([c["address"] for c in configs], ["127.0.0.1:9224"])
         self.assertTrue(runner.config["dry_run"])
+
+    def test_default_erp_debugger_address_uses_9224(self):
+        runner = erp_cli.HeadlessErpRunner({"debugger_address": "127.0.0.1:9222"}, dry_run=True)
+        self.assertEqual(runner._debug_browser_configs("ERP")[0]["address"], "127.0.0.1:9224")
 
     def test_dry_run_never_calls_parent_save_or_progress_apply(self):
         cfg = erp_cli.load_cli_config()

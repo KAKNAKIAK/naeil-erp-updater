@@ -6,7 +6,7 @@
   "use_existing_browser": true,
   "debugger_address": "127.0.0.1:9222",
   "topas_debugger_address": "127.0.0.1:9222",
-  "erp_debugger_address": "127.0.0.1:9223",
+  "erp_debugger_address": "127.0.0.1:9224",
   "topas_chrome_profile_dir": "ChromeProfile",
   "erp_chrome_profile_dir": "ChromeProfile_ERP",
   "erp_url": "http://erp.naeiltour.co.kr",

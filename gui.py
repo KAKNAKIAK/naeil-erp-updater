@@ -51,7 +51,7 @@ from fare.store import load_fare_snapshot
 from topas.availability import parse_availability_text
 from topas.collector import join_raw_blocks, save_raw_backup
 
-APP_VERSION = "v5.0.33"
+APP_VERSION = "v5.0.34"
 UPDATER_EXE_NAME = "UpdateHelper.exe"
 
 # 그리드 컬럼 정의
@@ -463,7 +463,7 @@ class RpaGuiApp:
             'use_existing_browser': True,
             'debugger_address': '127.0.0.1:9222',
             'topas_debugger_address': '127.0.0.1:9222',
-            'erp_debugger_address': '127.0.0.1:9223',
+            'erp_debugger_address': '127.0.0.1:9224',
             'topas_chrome_profile_dir': 'ChromeProfile',
             'erp_chrome_profile_dir': 'ChromeProfile_ERP',
             'erp_url': 'http://erp.naeiltour.co.kr',
@@ -5581,9 +5581,9 @@ class RpaGuiApp:
             profile_dir = self.config.get('topas_chrome_profile_dir', 'ChromeProfile')
             default_port = 9222
         else:
-            address = self.config.get('erp_debugger_address') or '127.0.0.1:9223'
+            address = self.config.get('erp_debugger_address') or '127.0.0.1:9224'
             profile_dir = self.config.get('erp_chrome_profile_dir', 'ChromeProfile_ERP')
-            default_port = 9223
+            default_port = 9224
 
         host, port = self._parse_debugger_address(address, default_port)
         return {
@@ -5601,7 +5601,7 @@ class RpaGuiApp:
         if normalized == 'TOPAS':
             fallbacks = [
                 (legacy, self.config.get('topas_chrome_profile_dir', 'ChromeProfile'), 9222),
-                (self.config.get('erp_debugger_address'), self.config.get('erp_chrome_profile_dir', 'ChromeProfile_ERP'), 9223),
+                (self.config.get('erp_debugger_address'), self.config.get('erp_chrome_profile_dir', 'ChromeProfile_ERP'), 9224),
             ]
         else:
             fallbacks = [
