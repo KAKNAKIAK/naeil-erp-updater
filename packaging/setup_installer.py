@@ -28,7 +28,7 @@ except Exception:
 
 APP_NAME = "NaeilERPUpdater"
 SHORTCUT_NAME = "Naeil ERP Fare Updater"
-APP_VERSION = "v5.0.34"
+APP_VERSION = "v5.0.35"
 
 PUBLISHER = "Naeil Tour"
 UNINSTALLER_NAME = "Uninstall.exe"
@@ -86,6 +86,8 @@ def merge_v2_selectors(config_path):
         config = json.loads(config_path.read_text(encoding="utf-8-sig"))
         if not isinstance(config, dict):
             return
+        if config.get("erp_debugger_address") == "127.0.0.1:9223":
+            config["erp_debugger_address"] = "127.0.0.1:9224"
         selectors = config.get("selectors")
         if not isinstance(selectors, dict):
             selectors = {}
