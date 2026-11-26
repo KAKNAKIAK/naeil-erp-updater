@@ -1,7 +1,7 @@
 {
-    "version":  "v5.0.32",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.32/NaeilERPUpdater_Setup_v5.0.32.exe",
-    "sha256":  "A28C432FAB482E40D2BF8896CFE054EA468F1FA7A3E69AA10E9A72533ADFBC07",
+    "version":  "v5.0.33",
+    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.33/NaeilERPUpdater_Setup_v5.0.33.exe",
+    "sha256":  "496E4264FA25C40B197776BD42197E9312D43E3FD24640649076C9545C183E0E",
     "notes":  [
                   "2페이지 이상에서도 요금 저장 후 해당 페이지를 재조회해 성인 양수 금액 반영을 검증합니다.",
                   "엑셀 빈 요금 칸 유지, 호텔비 단독 열 매핑 및 예약마감 입력 처리를 수정했습니다.",
