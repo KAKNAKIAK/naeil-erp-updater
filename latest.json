@@ -1,11 +1,8 @@
 {
-    "version":  "v5.0.33",
-    "download_url":  "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.33/NaeilERPUpdater_Setup_v5.0.33.exe",
-    "sha256":  "496E4264FA25C40B197776BD42197E9312D43E3FD24640649076C9545C183E0E",
-    "notes":  [
-                  "2페이지 이상에서도 요금 저장 후 해당 페이지를 재조회해 성인 양수 금액 반영을 검증합니다.",
-                  "엑셀 빈 요금 칸 유지, 호텔비 단독 열 매핑 및 예약마감 입력 처리를 수정했습니다.",
-                  "TOPAS 윤년·날짜 처리와 기준 Y 운임 미등록 노선의 마감일 유실을 수정했습니다.",
-                  "저장 대기 실패 처리를 보강하고 미사용 코드·중복 파싱 규칙을 정리했습니다."
-              ]
+  "version": "v5.0.34",
+  "download_url": "https://github.com/KAKNAKIAK/naeil-erp-updater/releases/download/v5.0.34/NaeilERPUpdater_Setup_v5.0.34.exe",
+  "sha256": "AC047FABA4F93080975FAEAC70CC17A98521360551E14EE071AF1EEF37377E88",
+  "notes": [
+    "ERP 디버깅 Chrome 기본 포트를 9224로 변경했습니다. TOPAS 기본 포트 9222는 유지합니다."
+  ]
 }
